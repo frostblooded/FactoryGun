@@ -1,0 +1,71 @@
+name: Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: 4.5.1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for Godot project
+        id: project
+        run: echo "exists=$([ -f project.godot ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Godot and web export templates
+        if: steps.project.outputs.exists == 'true'
+        run: |
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          curl -sSLo godot.zip "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q godot.zip
+          sudo mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot
+          curl -sSLo templates.tpz "$base/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          dir="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$dir"
+          unzip -qj templates.tpz 'templates/web_*' 'templates/version.txt' -d "$dir"
+          rm godot.zip templates.tpz
+
+      - name: Export for Web
+        if: steps.project.outputs.exists == 'true'
+        run: |
+          mkdir -p build/web
+          godot --headless --import
+          godot --headless --export-release "Web" build/web/index.html
+          test -f build/web/index.wasm
+
+      - uses: actions/configure-pages@v5
+        if: steps.project.outputs.exists == 'true'
+
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.project.outputs.exists == 'true'
+        with:
+          path: build/web
+
+    outputs:
+      exists: ${{ steps.project.outputs.exists }}
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.exists == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
