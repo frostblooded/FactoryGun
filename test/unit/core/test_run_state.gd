@@ -1,6 +1,5 @@
 extends GutTest
 
-const START_COUNTS: Dictionary = {"fire": 1, "speed_up": 1}   # Inventory.to_dict() of Tuning.START_INVENTORY
 const DEFAULT_HEADLINE: String = "1 bullet/shot · 4 shots/s · 10.0 dmg/shot"
 const PLAIN: String = "DMG 10.0 · SPD 600 · SIZE 5.0"
 const FIRED: String = PLAIN + " · FIRE I"
@@ -13,7 +12,7 @@ func test_initial_state() -> void:
 	var run: RunState = RunState.new(42)
 	assert_eq(run.run_seed, 42)
 	assert_eq(run.graph.to_dict(), FactoryGraph.create_default().to_dict())
-	assert_eq(run.inventory.to_dict(), START_COUNTS)
+	assert_eq(run.inventory.to_dict(), _start_counts())
 	assert_eq(run.inventory.kinds_ever_owned(), [MachineCatalog.FIRE, MachineCatalog.SPEED_UP])
 	assert_eq(run.flow.state, GameFlow.State.BUILD)
 	assert_eq(run.flow.wave, 1)
@@ -50,7 +49,7 @@ func test_place_consumes_remove_refunds() -> void:
 	assert_eq(_keys(run.graph), ["1:0>2:0"])                         # the remove healed the chain
 	assert_eq(run.try_remove_machine(FactoryGraph.SOURCE_ID), GraphError.Code.NOT_REMOVABLE)
 	assert_eq(run.try_remove_machine(3), GraphError.Code.NO_SUCH_MACHINE)
-	assert_eq(run.inventory.to_dict(), START_COUNTS)                 # refused removes refund nothing
+	assert_eq(run.inventory.to_dict(), _start_counts())              # refused removes refund nothing
 	assert_eq(run.owned(MachineCatalog.SOURCE), 1)
 	_assert_consistent(run)
 
@@ -67,7 +66,7 @@ func test_out_of_stock() -> void:
 	assert_eq(run.try_place_machine(MachineCatalog.FIRE, Vector2i(13, 0)), GraphError.Code.OUT_OF_BOUNDS)
 	assert_eq(run.try_place_machine(MachineCatalog.FIRE, Vector2i(1, 5)), GraphError.Code.CELL_OCCUPIED)
 	assert_eq(run.graph.to_dict(), before)
-	assert_eq(run.inventory.to_dict(), START_COUNTS)
+	assert_eq(run.inventory.to_dict(), _start_counts())
 	assert_eq(run.try_place_machine(MachineCatalog.FIRE, Vector2i(5, 1)), GraphError.Code.OK)
 	assert_eq(run.try_place_machine(MachineCatalog.FIRE, Vector2i(8, 1)), GraphError.Code.OUT_OF_STOCK)   # the only one
 	assert_eq(run.graph.count_kind(MachineCatalog.FIRE), 1)
@@ -80,7 +79,7 @@ func test_place_with_splice() -> void:
 	assert_eq(run.try_place_machine(MachineCatalog.FIRE, Vector2i(13, 0), belt), GraphError.Code.OUT_OF_BOUNDS)
 	assert_eq(run.try_place_machine(MachineCatalog.FIRE, Vector2i(5, 1), Wire.make(1, 0, 9, 0)),
 			GraphError.Code.NO_SUCH_WIRE)
-	assert_eq(run.inventory.to_dict(), START_COUNTS)
+	assert_eq(run.inventory.to_dict(), _start_counts())
 	assert_eq(run.try_place_machine(MachineCatalog.FIRE, Vector2i(5, 1), belt), GraphError.Code.OK)
 	assert_eq(_keys(run.graph), ["1:0>3:0", "3:0>2:0"])
 	assert_eq(run.inventory.count(MachineCatalog.FIRE), 0)
@@ -273,7 +272,7 @@ func test_restart_resets_same_instances() -> void:
 	assert_eq(run.total_kills, 0)
 	assert_true(run.offers.is_empty())
 	assert_false(run.active_plan.is_valid())
-	assert_eq(run.inventory.to_dict(), START_COUNTS)
+	assert_eq(run.inventory.to_dict(), _start_counts())
 	assert_eq(run.inventory.kinds_ever_owned(), [MachineCatalog.FIRE, MachineCatalog.SPEED_UP])
 	assert_eq(run.graph.to_dict(), FactoryGraph.create_default().to_dict())
 	assert_eq(run.plan.summary_lines(), PackedStringArray([DEFAULT_HEADLINE, "#1 " + PLAIN]))
@@ -349,6 +348,11 @@ func _labels(offers: Array[RewardOffer]) -> String:
 	for o: RewardOffer in offers:
 		out.append(o.label())
 	return ", ".join(out)
+
+
+## Inventory.to_dict() of the starting inventory.
+func _start_counts() -> Dictionary:
+	return Inventory.from_counts(Tuning.START_INVENTORY).to_dict()
 
 
 func _instance_ids(run: RunState) -> Array[int]:
