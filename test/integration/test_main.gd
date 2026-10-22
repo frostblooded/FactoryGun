@@ -108,6 +108,24 @@ func test_space_starts_wave_and_locks_editor() -> void:
 	await wait_process_frames(2)
 
 
+func test_x_deletes_hovered_and_escape_cancels() -> void:
+	var main: Main = _main()
+	var run: RunState = main.run
+	var board: FactoryBoard = main.panel.board
+	board.place_requested.emit(MachineCatalog.FIRE, Vector2i(5, 1), null)
+	assert_eq(run.inventory.count(MachineCatalog.FIRE), 0)
+	board.interaction.motion(Vector2(240, 80))                       # hover Fire #3
+	_key(main, KEY_X)
+	assert_false(run.graph.has_machine(3))
+	assert_eq(run.inventory.count(MachineCatalog.FIRE), 1)          # refunded
+	board.interaction.press(Vector2(120, 240), MOUSE_BUTTON_LEFT)    # the Source's output: a wire drag
+	assert_eq(board.interaction.mode, BoardInteraction.Mode.DRAG_WIRE)
+	_key(main, KEY_ESCAPE)
+	assert_eq(board.interaction.mode, BoardInteraction.Mode.IDLE)
+	assert_eq(run.graph.machine_ids(), PackedInt32Array([1, 2]))
+	assert_eq(run.graph.to_dict()["wires"], ["1:0>2:0"])            # the cancelled drag connected nothing
+	await wait_process_frames(2)
+
 func test_full_loop_build_play_reward_build() -> void:
 	var main: Main = _main()
 	var run: RunState = main.run
@@ -144,6 +162,8 @@ func test_full_loop_build_play_reward_build() -> void:
 	assert_false(main.game_over_overlay.visible)
 	assert_eq(main.reward_overlay.offers, run.offers)
 	assert_false(main.arena.is_running())
+	assert_true(main.arena.world.bullets.is_empty(), "the arena went idle: no frozen last frame")
+	assert_true(main.arena.view._fx.is_empty())
 	assert_true(main.panel.board.interaction.locked)
 	assert_true(main.panel.start_button.disabled)
 	var hp_left: float = run.player_hp

@@ -63,6 +63,27 @@ func test_backward_route_goes_around() -> void:
 		Vector2(200, 220), Vector2(220, 220), Vector2(220, 176), Vector2(180, 176), Vector2(180, 120), Vector2(200, 120)]))
 
 
+func test_edge_ports_stay_on_the_floor() -> void:
+	# Fire #3 at (0, 8): its input is on the floor's left edge; Ice #4 at (12, 9): its output is on the right edge
+	var g: FactoryGraph = FactoryGraph.create_default()
+	assert_eq(g.add_machine(MachineCatalog.FIRE, Vector2i(0, 8)), 3)
+	assert_eq(g.add_machine(MachineCatalog.ICE, Vector2i(12, 9)), 4)
+	for w: PackedInt32Array in [PackedInt32Array([1, 0, 3, 0]), PackedInt32Array([3, 0, 4, 0]), PackedInt32Array([4, 0, 2, 0])]:
+		assert_eq(g.connect_ports(w[0], w[1], w[2], w[3]), GraphError.Code.OK)
+	# around into a column-0 input: the last leg runs down the machine's own left edge, 6 px in
+	assert_eq(BoardLayout.belt_points(g, g.wire_from(1, 0)), PackedVector2Array([
+		Vector2(120, 240), Vector2(140, 240), Vector2(140, 300), Vector2(6, 300), Vector2(6, 360), Vector2(0, 360)]))
+	# around out of a column-12 output: the first leg runs up the machine's own right edge, 6 px in
+	assert_eq(BoardLayout.belt_points(g, g.wire_from(4, 0)), PackedVector2Array([
+		Vector2(560, 400), Vector2(554, 400), Vector2(554, 320), Vector2(420, 320), Vector2(420, 240), Vector2(440, 240)]))
+	for w: Wire in g.wires():
+		for p: Vector2 in BoardLayout.belt_points(g, w):
+			assert_true(_bounds.grow(0.001).has_point(p), "%s at %s" % [w.key(), p])
+	# a stub with room keeps its STUB: column 11's output
+	assert_eq(BeltRouter.route(Vector2(520, 80), Vector2(120, 240), Rect2(440, 40, 80, 80), Rect2(120, 200, 80, 80),
+			0.0, _bounds)[1], Vector2(540, 80))
+
+
 func test_splitter_lanes_differ() -> void:
 	assert_eq(BeltRouter.lane_offset(0, 2), -4.0)
 	assert_eq(BeltRouter.lane_offset(1, 2), 4.0)
@@ -90,3 +111,18 @@ func test_distance_to() -> void:
 	assert_eq(BeltRouter.sample(pts, -5.0), [Vector2(0, 0), Vector2.RIGHT])
 	assert_eq(BeltRouter.sample(pts, 1000.0), [Vector2(100, 50), Vector2.DOWN])
 	assert_eq(BeltRouter.sample(PackedVector2Array([Vector2(5, 5), Vector2(5, 5)]), 3.0), [Vector2(5, 5), Vector2.RIGHT])
+
+
+func test_sample_every_walks_once_like_sample() -> void:
+	var pts: PackedVector2Array = PackedVector2Array([Vector2(0, 0), Vector2(100, 0), Vector2(100, 50)])
+	var marks: PackedVector2Array = BeltRouter.sample_every(pts, 5.0, 12.0)
+	assert_eq(marks.size(), 2 * 13)                       # arc lengths 5, 17, ..., 149: all below the length 150
+	for i: int in 13:
+		var at: Array[Vector2] = BeltRouter.sample(pts, 5.0 + 12.0 * i)
+		assert_almost_eq(marks[2 * i], at[0], Vector2(1e-4, 1e-4))
+		assert_eq(marks[2 * i + 1], at[1])
+	# zero-length segments are skipped, and a zero-length belt (touching machines) has no marks
+	var bend: PackedVector2Array = PackedVector2Array([Vector2(0, 0), Vector2(10, 0), Vector2(10, 0), Vector2(10, 10)])
+	assert_eq(BeltRouter.sample_every(bend, 0.0, 4.0), PackedVector2Array([Vector2(0, 0), Vector2.RIGHT, Vector2(4, 0),
+			Vector2.RIGHT, Vector2(8, 0), Vector2.RIGHT, Vector2(10, 2), Vector2.DOWN, Vector2(10, 6), Vector2.DOWN]))
+	assert_true(BeltRouter.sample_every(PackedVector2Array([Vector2(5, 5), Vector2(5, 5)]), 0.0, 12.0).is_empty())

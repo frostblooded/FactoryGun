@@ -7,9 +7,10 @@ const FLAME_CORE: Color = Color("ffd34d")
 const ICON_SIZE: float = 12.0             # the s of draw_icon on a machine
 
 
-## rect is the 80x80 machine rect; id <= 0 (a ghost) draws no id plate.
+## rect is the 80x80 machine rect; id <= 0 (a ghost) draws no id plate. still = true leaves out an icon that
+## animates, for a cached drawing that draws it every frame with draw_machine_icon.
 static func draw_machine(ci: CanvasItem, kind: StringName, rect: Rect2, id: int, status: ShotPlan.MachineStatus,
-		alpha: float, t: float) -> void:
+		alpha: float, t: float, still: bool = false) -> void:
 	var def: MachineDef = MachineCatalog.get_def(kind)
 	var font: Font = ThemeDB.fallback_font
 	var body: Rect2 = rect.grow(-3.0)
@@ -20,7 +21,8 @@ static func draw_machine(ci: CanvasItem, kind: StringName, rect: Rect2, id: int,
 	ci.draw_rect(Rect2(body.position + Vector2(10, 6), Vector2(body.size.x - 20, 5)), _a(def.color, alpha))
 	for corner: Vector2 in [Vector2(6, 6), Vector2(body.size.x - 6, 6), Vector2(6, body.size.y - 6), body.size - Vector2(6, 6)]:
 		ci.draw_circle(body.position + corner, 1.6, _a(UiColors.RIVET, alpha))
-	draw_icon(ci, kind, rect.get_center() + Vector2(0, 1), ICON_SIZE, alpha, t)
+	if not (still and animates(kind)):
+		draw_machine_icon(ci, kind, rect, alpha, t)
 	ci.draw_string(font, Vector2(rect.position.x, rect.end.y - 10), def.short_name, HORIZONTAL_ALIGNMENT_CENTER,
 			rect.size.x, 11, _a(UiColors.TEXT, alpha))
 	ci.draw_circle(Vector2(body.end.x - 14, body.position.y + 17), 4.0, _a(lamp_color(status), alpha))
@@ -38,6 +40,16 @@ static func draw_machine(ci: CanvasItem, kind: StringName, rect: Rect2, id: int,
 		var o: Vector2 = rect.position + BoardLayout.output_anchor_at(Vector2i.ZERO, port, def.output_ports) - Vector2(5, 0)
 		ci.draw_circle(o, 4.0, _a(UiColors.ACCENT, alpha))
 		ci.draw_arc(o, 5.0, 0.0, TAU, 16, _a(UiColors.OUTLINE, alpha), 1.5)
+
+
+## The icon of a machine at rect, where draw_machine puts it.
+static func draw_machine_icon(ci: CanvasItem, kind: StringName, rect: Rect2, alpha: float, t: float) -> void:
+	draw_icon(ci, kind, rect.get_center() + Vector2(0, 1), ICON_SIZE, alpha, t)
+
+
+## Whether the kind's icon changes with t (the Fire flame flickers).
+static func animates(kind: StringName) -> bool:
+	return kind == MachineCatalog.FIRE
 
 
 ## The procedural icon of a kind, about 2*s wide, centred on centre. t (seconds) animates the flame.

@@ -7,7 +7,7 @@ const MACHINE_SIZE: Vector2 = Vector2(80, 80)
 const PORT_HIT: float = 12.0
 const MAGNET: float = 24.0
 const BELT_HIT: float = 8.0
-const SPLICE: float = 10.0
+const SPLICE: float = TILE / 2.0          # drop_cell puts the ports on any belt this close, so the drop splices into it
 const DRAG_THRESHOLD: float = 6.0
 
 

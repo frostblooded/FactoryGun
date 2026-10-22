@@ -276,19 +276,20 @@ func test_drop_preview_place_splice_and_reasons() -> void:
 	assert_eq(placed.kind, MachineCatalog.FIRE)
 	assert_eq(placed.cell, Vector2i(5, 1))
 	assert_null(placed.splice)
-	# within 10 px of a belt: splice
-	var splice: DropPreview = ia.drop_preview(MachineCatalog.FIRE, Vector2(280, 250))
-	assert_true(splice.valid)
-	assert_eq(splice.cell, Vector2i(6, 5))
-	assert_same(splice.splice, g.wire_from(1, 0))
-	var spliced: BoardAction = ia.drop(MachineCatalog.FIRE, Vector2(280, 250))
+	# a drop that snaps the ports onto a belt splices into it: every cursor within 20 px of y 240 lands on cell row 5
+	for dy: int in [-19, -10, 0, 10, 14, 19]:
+		var splice: DropPreview = ia.drop_preview(MachineCatalog.FIRE, Vector2(280, 240 + dy))
+		assert_true(splice.valid)
+		assert_eq(splice.cell, Vector2i(6, 5))
+		assert_same(splice.splice, g.wire_from(1, 0), "%d px off the belt" % dy)
+	var spliced: BoardAction = ia.drop(MachineCatalog.FIRE, Vector2(280, 254))
 	assert_eq(spliced.type, BoardAction.Type.PLACE)
 	assert_eq(spliced.cell, Vector2i(6, 5))
 	assert_same(spliced.splice, g.wire_from(1, 0))
-	# 11 px away: a plain placement on the same cell
-	var beside: DropPreview = ia.drop_preview(MachineCatalog.FIRE, Vector2(280, 251))
+	# 21 px away: a plain placement on the next row, its top edge on the belt
+	var beside: DropPreview = ia.drop_preview(MachineCatalog.FIRE, Vector2(280, 261))
 	assert_true(beside.valid)
-	assert_eq(beside.cell, Vector2i(6, 5))
+	assert_eq(beside.cell, Vector2i(6, 6))
 	assert_null(beside.splice)
 	# a splice that does not fit falls back to the plain check, and its reason
 	var blocked: DropPreview = ia.drop_preview(MachineCatalog.FIRE, Vector2(130, 240))   # cell (2, 5): the Source

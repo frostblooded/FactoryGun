@@ -1,6 +1,7 @@
 extends GutTest
 
 const Fixtures = preload("res://test/helpers/fixtures.gd")
+const Mouse = preload("res://test/helpers/mouse.gd")
 const STEP: float = SimTuning.STEP
 
 var _idled_on_death: ArenaController = null
@@ -132,6 +133,56 @@ func test_render_smoke() -> void:
 	arena.go_idle(20.0, 5)                    # idle HUD: hint, BUILD PHASE, low-HP bar
 	await wait_process_frames(2)
 	assert_false(arena.is_running())
+
+
+func test_physics_tick_reads_real_input() -> void:
+	await Mouse.prepare(self)
+	InputSetup.ensure_actions()
+	var arena: ArenaController = _arena()
+	arena.position = Vector2(100, 0)          # local != global, as in the game
+	arena.start_wave(1, Fixtures.plan_of([BulletSpec.new()]), 7, 100.0)
+	Mouse.move(Vector2(900, 450), Vector2(900, 450), 0)     # arena-local (800, 450): right of the player
+	var w: InputEventKey = InputEventKey.new()
+	w.physical_keycode = KEY_W
+	w.pressed = true
+	Input.parse_input_event(w)
+	Mouse.button(Vector2(900, 450), true)                 # real events, so the InputSetup bindings are covered
+	await wait_process_frames(1)
+	arena._physics_process(STEP)
+	assert_lt(arena.world.player.pos.y, 450.0, "W moves up")
+	assert_almost_eq(arena.world.player.aim_dir.x, 1.0, 0.01, "aim follows the local mouse")
+	assert_eq(arena.world.bullets.size(), 1, "fire held over the arena shoots")
+	Mouse.move(Vector2(50, 450), Vector2(900, 450), MOUSE_BUTTON_MASK_LEFT)   # over the editor
+	await wait_process_frames(1)
+	for i: int in 30:
+		arena._physics_process(STEP)
+	assert_eq(arena.world.bullets.size(), 1, "no shots while the mouse is over the editor")
+	Mouse.button(Vector2(50, 450), false)
+	w.pressed = false
+	Input.parse_input_event(w)
+	await wait_process_frames(1)
+
+
+func test_effects_and_banner_expire() -> void:
+	var arena: ArenaController = _arena()
+	var view: ArenaView = arena.view
+	view.add_events([SimEvent.make(SimEvent.Type.SHOT, Vector2(522, 450), Color.ORANGE),
+			SimEvent.make(SimEvent.Type.HIT, Vector2(600, 450), Color.CYAN, 5),
+			SimEvent.make(SimEvent.Type.KILL, Vector2(700, 450), Color.PURPLE, 6),
+			SimEvent.make(SimEvent.Type.PLAYER_HIT, Vector2(500, 450), Color.RED, 7)])
+	assert_eq(view._fx.size(), 3)
+	view._process(0.1)                        # the muzzle flash and the white hit flash are over
+	assert_eq(view._fx.size(), 2)
+	assert_true(view._hit_flash.is_empty())
+	assert_gt(view._edge_flash, 0.0)
+	view._process(1.0)
+	assert_true(view._fx.is_empty())
+	assert_eq(view._edge_flash, 0.0)
+	arena.hud.show_banner("WAVE 2")
+	arena.hud._process(1.0)
+	assert_almost_eq(arena.hud.banner_left, 0.5, 1e-4)
+	arena.hud._process(1.0)
+	assert_eq(arena.hud.banner_left, 0.0)
 
 
 func _arena() -> ArenaController:

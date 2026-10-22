@@ -201,7 +201,7 @@ func test_hover_refreshes_after_graph_change() -> void:
 	assert_eq(panel.status_label.text, "Fire #3: Sets targets on fire: 6 damage/s per level for 3 s.")
 	plan.statuses[3] = ShotPlan.MachineStatus.CAPPED
 	panel._process(0.0)
-	assert_eq(panel.status_label.text, "Fire #3: Sets targets on fire: 6 damage/s per level for 3 s.  [capped]")
+	assert_eq(panel.status_label.text, "Fire #3 [capped]: Sets targets on fire: 6 damage/s per level for 3 s.")
 	await wait_process_frames(2)
 	assert_eq(g.remove_machine(3), GraphError.Code.OK)    # no motion: the board must re-hover by itself
 	assert_eq(ia.hover.type, BoardHit.Type.EMPTY)
@@ -209,14 +209,14 @@ func test_hover_refreshes_after_graph_change() -> void:
 	assert_eq(g.add_machine(MachineCatalog.ICE, Vector2i(3, 1)), 4)
 	assert_true(ia.hover.same_as(BoardHit.make(BoardHit.Type.MACHINE, 4)))
 	panel._process(0.0)
-	assert_eq(panel.status_label.text, "Ice #4: " + MachineCatalog.get_def(MachineCatalog.ICE).description + "  [idle]")
+	assert_eq(panel.status_label.text, "Ice #4 [idle]: " + MachineCatalog.get_def(MachineCatalog.ICE).description)
 	g.assign_from(FactoryGraph.create_default())          # a restart resets the ids
 	assert_eq(ia.hover.type, BoardHit.Type.EMPTY)
 	await wait_process_frames(2)
 	# the other hover texts; the Source and the Output have no id plate
 	ia.motion(Vector2(60, 220))
 	panel._process(0.0)
-	assert_eq(panel.status_label.text, "Basic Bullet: " + MachineCatalog.get_def(MachineCatalog.SOURCE).description + "  [idle]")
+	assert_eq(panel.status_label.text, "Basic Bullet [idle]: " + MachineCatalog.get_def(MachineCatalog.SOURCE).description)
 	ia.motion(Vector2(120, 240))
 	panel._process(0.0)
 	assert_eq(panel.status_label.text, "Output port: drag to an input port to connect.")
@@ -226,6 +226,100 @@ func test_hover_refreshes_after_graph_change() -> void:
 	assert_eq(g.disconnect_wire(g.wire_from(1, 0)), GraphError.Code.OK)
 	assert_eq(ia.hover.type, BoardHit.Type.EMPTY)
 	await wait_process_frames(2)
+	# the tag comes before the description, which the label trims: the Splitter's alone is wider than the label
+	assert_eq(g.add_machine(MachineCatalog.SPLITTER, Vector2i(6, 1)), 3)
+	plan.statuses[3] = ShotPlan.MachineStatus.ONE_SIDED
+	ia.motion(Vector2(280, 80))
+	panel._process(0.0)
+	assert_eq(panel.status_label.text, "Splitter #3 [one-sided]: " + MachineCatalog.get_def(MachineCatalog.SPLITTER).description)
+	var font: Font = panel.status_label.get_theme_font("font")
+	assert_gt(font.get_string_size(panel.status_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x, panel.status_label.size.x)
+
+
+func test_board_layers_and_what_redraws() -> void:
+	var g: FactoryGraph = FactoryGraph.create_default()
+	assert_eq(g.add_machine(MachineCatalog.FIRE, Vector2i(6, 2)), 3)
+	assert_eq(g.connect_ports(3, 0, FactoryGraph.OUTPUT_ID, 0), GraphError.Code.OK)   # shares the live belt's last leg
+	var panel: FactoryPanel = _panel(g, Fixtures.inventory_all(1))
+	var board: FactoryBoard = panel.board
+	# back to front: the floor, the machines, the flames, the belt beds (all behind the board's own drawing of
+	# what moves), then the lock overlay; so belts cross over machines they are not wired to
+	var behind: Array[Control] = [board._machine_layer, board._flame_layer, board._belt_layer]
+	assert_true(board.get_child(0) is FloorLayer)
+	for i: int in behind.size():
+		assert_same(board.get_child(i + 1), behind[i])
+		assert_true(behind[i].show_behind_parent)
+	assert_same(board.get_child(4), board._lock_layer)
+	assert_false(board._lock_layer.show_behind_parent)
+	# dead belts are drawn first, so a live belt's items stay on top where their routes overlap
+	var plan: ShotPlan = ShotPlan.new()
+	plan.live_wire_keys["1:0>2:0"] = true
+	plan.wire_streams["1:0>2:0"] = [BulletSpec.new()]
+	panel.set_plan(plan)
+	assert_eq(_keys(board._belts), ["3:0>2:0", "1:0>2:0"])
+	assert_eq(board._first_live, 1)
+	await wait_process_frames(2)
+	watch_signals(board)
+	watch_signals(board._machine_layer)
+	watch_signals(board._belt_layer)
+	await wait_process_frames(3)
+	assert_gte(get_signal_emit_count(board, "draw"), 2, "what moves is drawn every frame")
+	assert_signal_emit_count(board._machine_layer, "draw", 0, "nothing changed")
+	assert_signal_emit_count(board._belt_layer, "draw", 0, "nothing changed")
+	board.interaction.motion(Vector2(300, 240))           # hover the live belt: it is drawn brightened
+	await wait_process_frames(3)
+	assert_signal_emit_count(board._belt_layer, "draw", 1)
+	board.interaction.motion(Vector2(310, 242))           # still the same belt
+	await wait_process_frames(3)
+	assert_signal_emit_count(board._belt_layer, "draw", 1)
+	assert_eq(g.move_machine(3, Vector2i(6, 0)), GraphError.Code.OK)
+	assert_eq(_keys(board._belts), ["3:0>2:0", "1:0>2:0"])
+	assert_eq(board._routes[0], BoardLayout.belt_points(g, g.wire_from(3, 0)))   # a move re-routes the belts
+	await wait_process_frames(2)
+	assert_signal_emit_count(board._machine_layer, "draw", 2)
+	assert_signal_emit_count(board._belt_layer, "draw", 2)
+	board.interaction.press(Vector2(280, 40), MOUSE_BUTTON_LEFT)   # drag Fire #3: drawn faded in its old place
+	board.interaction.motion(Vector2(320, 120))
+	await wait_process_frames(2)
+	assert_signal_emit_count(board._machine_layer, "draw", 3)
+
+
+func test_refusal_box_and_remove_label_stay_clear_and_inside() -> void:
+	var board: FactoryBoard = _panel(FactoryGraph.create_default(), Inventory.new()).board
+	var floor_rect: Rect2 = Rect2(Vector2.ZERO, board.size)
+	var box_size: Vector2 = Vector2(200, 23)
+	# a palette drop's reason never hides under its 80x80 preview, centred on the cursor and drawn over the board
+	for at: Vector2 in [Vector2(80, 240), Vector2(470, 240), Vector2(470, 440), Vector2(540, 470), Vector2(20, 20)]:
+		var box: Rect2 = board._reason_box(box_size, at, FactoryBoard.PREVIEW_GAP)
+		assert_true(floor_rect.encloses(box), str(at))
+		assert_false(box.intersects(Rect2(at - Vector2(40, 40), Vector2(80, 80))), str(at))
+	assert_eq(board._reason_box(box_size, Vector2(100, 100), FactoryBoard.CURSOR_GAP).position, Vector2(114, 114))
+	# "RELEASE TO REMOVE" is centred on the machine, and kept on the floor at its edges
+	var middle: Rect2 = BoardLayout.machine_rect_at(Vector2i(6, 1))
+	assert_eq(board._release_label(middle).get_center(), middle.get_center())
+	assert_eq(board._release_label(BoardLayout.machine_rect_at(Vector2i(0, 1))).position.x, 0.0)
+	assert_eq(board._release_label(BoardLayout.machine_rect_at(Vector2i(12, 10))).end, Vector2(560, 449))
+
+
+func test_locking_cancels_a_palette_drag() -> void:
+	await Mouse.prepare(self)
+	var panel: FactoryPanel = _panel(FactoryGraph.create_default(), Fixtures.inventory_all(1))
+	watch_signals(panel.board)
+	Mouse.move(SLOT_0, SLOT_0, 0)
+	await wait_process_frames(1)
+	Mouse.button(SLOT_0, true)
+	await wait_process_frames(1)
+	var last: Vector2 = SLOT_0
+	for p: Vector2 in [SLOT_0 + Vector2(0, -60), SLOT_0 + Vector2(0, -120)]:   # up onto the board
+		Mouse.move(p, last, MOUSE_BUTTON_MASK_LEFT)
+		last = p
+		await wait_process_frames(1)
+	assert_true(get_viewport().gui_is_dragging())
+	panel.set_locked(true, "LOCKED · WAVE 1 IN PROGRESS")
+	assert_false(get_viewport().gui_is_dragging())
+	Mouse.button(last, false)
+	await wait_process_frames(2)
+	assert_signal_not_emitted(panel.board, "place_requested")
 
 
 func test_palette_drag_places_on_board() -> void:
@@ -250,7 +344,8 @@ func test_palette_drag_onto_belt_splices() -> void:
 	var g: FactoryGraph = FactoryGraph.create_default()
 	var panel: FactoryPanel = _panel(g, Fixtures.inventory_all(1))
 	watch_signals(panel.board)
-	await Mouse.drag(self, SLOT_0, FactoryPanel.BOARD_POS + Vector2(280, 244))   # 4 px from the belt 1:0>2:0
+	# 14 px from the belt 1:0>2:0, the drop cell already puts the machine's ports on it: that splices too
+	await Mouse.drag(self, SLOT_0, FactoryPanel.BOARD_POS + Vector2(280, 254))
 	assert_signal_emit_count(panel.board, "place_requested", 1)
 	var params: Array = get_signal_parameters(panel.board, "place_requested")
 	assert_eq(params[0], MachineCatalog.FIRE)
@@ -290,6 +385,13 @@ func test_right_click_belt_emits_disconnect() -> void:
 	assert_signal_emit_count(panel.board, "disconnect_requested", 1)
 	assert_same(get_signal_parameters(panel.board, "disconnect_requested")[0], g.wire_from(FactoryGraph.SOURCE_ID, 0))
 	assert_signal_not_emitted(panel.board, "remove_requested")
+
+
+func _keys(wires: Array[Wire]) -> Array[String]:
+	var out: Array[String] = []
+	for w: Wire in wires:
+		out.append(w.key())
+	return out
 
 
 func _panel(g: FactoryGraph, inv: Inventory) -> FactoryPanel:

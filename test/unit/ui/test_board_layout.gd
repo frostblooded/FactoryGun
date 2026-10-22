@@ -48,6 +48,12 @@ func test_hit_test_priority() -> void:
 	var cut: BoardAction = ia.secondary(shared)
 	assert_eq(cut.type, BoardAction.Type.DISCONNECT)
 	assert_eq(cut.wire.key(), "3:0>4:0")
+	# the output wins whatever the ids: here the right machine was placed first, so its input is visited first
+	var r: FactoryGraph = FactoryGraph.create_default()
+	var right: int = r.add_machine(MachineCatalog.ICE, Vector2i(5, 1))
+	var left: int = r.add_machine(MachineCatalog.FIRE, Vector2i(3, 1))
+	assert_lt(right, left)
+	assert_true(BoardLayout.hit_test(r, Vector2(200, 80)).port.equals(PortRef.make(left, 0, true)))
 	# a port beats the machine body it sits on
 	var input: BoardHit = BoardLayout.hit_test(g, Vector2(125, 82))
 	assert_true(input.same_as(BoardHit.make(BoardHit.Type.PORT, 3, PortRef.make(3, 0, false))))
@@ -81,7 +87,8 @@ func test_belt_at_and_input_magnet() -> void:
 	assert_eq(BoardLayout.belt_at(g, Vector2(300, 248), BoardLayout.BELT_HIT).key(), "1:0>2:0")   # 8 px is in
 	assert_null(BoardLayout.belt_at(g, Vector2(300, 249), BoardLayout.BELT_HIT))
 	assert_null(BoardLayout.belt_at(g, Vector2(100, 240), BoardLayout.BELT_HIT))
-	assert_eq(BoardLayout.belt_at(g, Vector2(300, 250), BoardLayout.SPLICE).key(), "1:0>2:0")
+	assert_eq(BoardLayout.belt_at(g, Vector2(300, 260), BoardLayout.SPLICE).key(), "1:0>2:0")   # 20 px is in
+	assert_null(BoardLayout.belt_at(g, Vector2(300, 261), BoardLayout.SPLICE))
 	assert_same(BoardLayout.belt_at(g, Vector2(300, 240), 1.0), g.wire_from(1, 0))   # the graph's own Wire
 	assert_eq(g.add_machine(MachineCatalog.FIRE, Vector2i(5, 1)), 3)   # input at (200, 80)
 	assert_eq(g.add_machine(MachineCatalog.ICE, Vector2i(5, 3)), 4)    # input at (200, 160)

@@ -21,8 +21,10 @@ static func route(a: Vector2, b: Vector2, from_rect: Rect2, to_rect: Rect2, lane
 	else:
 		lane_y = minf(maxf(from_rect.end.y, to_rect.end.y) + STUB, bounds.end.y - 6.0)
 	lane_y += lane
-	var x1: float = a.x + STUB
-	var x2: float = b.x - STUB
+	# Clamped like lane_y: a port on the floor's edge (output in column 12, input in column 0) has no room
+	# for a stub, so its leg runs along the machine's own edge instead of off the clipped board.
+	var x1: float = minf(a.x + STUB, bounds.end.x - 6.0)
+	var x2: float = maxf(b.x - STUB, bounds.position.x + 6.0)
 	return PackedVector2Array([a, Vector2(x1, a.y), Vector2(x1, lane_y), Vector2(x2, lane_y), Vector2(x2, b.y), b])
 
 
@@ -44,6 +46,26 @@ static func distance_to(points: PackedVector2Array, p: Vector2) -> float:
 	for i: int in range(points.size() - 1):
 		best = minf(best, p.distance_to(Geometry2D.get_closest_point_to_segment(p, points[i], points[i + 1])))
 	return best
+
+
+## Flattened [position, unit direction] pairs at arc lengths first, first + step, ... below the route's length,
+## in one walk along the route (the painter marks a belt every few px; sample() would rewalk it per mark).
+## step must be > 0.
+static func sample_every(points: PackedVector2Array, first: float, step: float) -> PackedVector2Array:
+	var out: PackedVector2Array = []
+	var d: float = maxf(first, 0.0)
+	var start: float = 0.0                # arc length at points[i]
+	for i: int in range(points.size() - 1):
+		var seg: float = points[i].distance_to(points[i + 1])
+		if seg <= 0.0:
+			continue
+		var dir: Vector2 = (points[i + 1] - points[i]) / seg
+		while d < start + seg:
+			out.append(points[i] + dir * (d - start))
+			out.append(dir)
+			d += step
+		start += seg
+	return out
 
 
 ## [position, unit direction] at arc length d, clamped to the route. A zero-length route points right.

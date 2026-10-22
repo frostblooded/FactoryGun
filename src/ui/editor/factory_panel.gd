@@ -140,22 +140,22 @@ func _refresh_start_button() -> void:
 	start_button.disabled = _locked or not _start_enabled
 
 
+## The status tag goes before the description: the label trims the end, and the Splitter's text alone overruns it.
 func _machine_text(id: int) -> String:
 	var def: MachineDef = board.interaction.graph.def_of(id)
 	var text: String = def.display_name
 	if def.removable:
 		text += " #%d" % id
-	text += ": " + def.description
 	match _plan.status_of(id):
 		ShotPlan.MachineStatus.CAPPED:
-			text += "  [capped]"
+			text += " [capped]"
 		ShotPlan.MachineStatus.ONE_SIDED:
-			text += "  [one-sided]"
+			text += " [one-sided]"
 		ShotPlan.MachineStatus.DEAD_END:
-			text += "  [dead end]"
+			text += " [dead end]"
 		ShotPlan.MachineStatus.IDLE:
-			text += "  [idle]"
-	return text
+			text += " [idle]"
+	return text + ": " + def.description
 
 
 func _on_board_refused(reason: String) -> void:
