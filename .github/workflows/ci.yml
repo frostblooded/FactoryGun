@@ -35,3 +35,18 @@ jobs:
       - name: Run GUT tests
         if: hashFiles('addons/gut/gut_cmdln.gd') != ''
         run: godot --headless -s addons/gut/gut_cmdln.gd -gdir=res://test -ginclude_subdirs -gexit
+
+      - name: Check generated files and boot the game
+        if: hashFiles('project.godot') != ''
+        run: |
+          set -o pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --porcelain
+            echo "::error::Import or tests changed the tree. Commit the generated .uid files."
+            exit 1
+          fi
+          godot --headless --quit-after 300 2>&1 | tee "$RUNNER_TEMP/boot.log"
+          if grep -nE 'SCRIPT ERROR|Parse Error|^ERROR:|^WARNING:' "$RUNNER_TEMP/boot.log"; then
+            echo "::error::The game printed errors or warnings while booting."
+            exit 1
+          fi
