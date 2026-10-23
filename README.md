@@ -21,8 +21,8 @@ then build again. If you die, the run is over: restart and try a different facto
 | Place a machine | Drag it from the palette onto the floor. Drop it on a belt to splice it in. |
 | Move a machine | Drag it to another spot. Its belts follow. |
 | Remove a machine (refund) | Drag it off the floor, right-click it, or hover it and press Delete or X. |
-| Connect a belt | Drag from an output port (right edge) to an input port (left edge). |
-| Cut a belt | Right-click it, or hover it and press Delete or X. |
+| Connect a belt | Drag from an output port (right edge) to an input port (left edge). Dragging from an output port that already has a belt re-routes it. |
+| Cut a belt | Right-click it (or its output port), or hover it and press Delete or X. |
 | Cancel a gesture | Escape, or right-click while dragging. |
 | Start the wave | Space, Enter, or the START WAVE button. |
 | Move | W A S D or the arrow keys. |
@@ -53,11 +53,31 @@ godot --headless --import
 godot --headless -s addons/gut/gut_cmdln.gd -gdir=res://test -ginclude_subdirs -gexit
 ```
 
+The run should end with every test passing and 1 pending (see below). CI then checks that import and the
+tests left the tree clean (commit any new `.gd.uid` files), and boots the game headless for 300 frames with
+no errors or warnings:
+
+```sh
+git status --porcelain              # must print nothing
+godot --headless --quit-after 300   # must print no ERROR, WARNING, SCRIPT ERROR or Parse Error lines
+```
+
 To run one file, skip the post-run hook with an empty `-gconfig=`:
 
 ```sh
 godot --headless -s addons/gut/gut_cmdln.gd -gconfig= -gtest=res://test/integration/test_main.gd -gexit
 ```
+
+The pending test, `test_default_board_stays_in_its_draw_call_budget`, needs a renderer: a headless run
+counts no draw calls. Run it alone with one, for example under Xvfb:
+
+```sh
+xvfb-run -a -s '-screen 0 1600x900x24' godot --rendering-driver opengl3 -s addons/gut/gut_cmdln.gd \
+  -gconfig= -gtest=res://test/integration/test_main.gd -gunit_test_name=draw_call_budget -gexit
+```
+
+Run only that test with a renderer. The real-mouse tests hold only in headless runs: under X11, Godot
+drops a drag where the real pointer is.
 
 ## Design
 

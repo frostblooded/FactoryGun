@@ -4,6 +4,9 @@ This file is the single source of truth for building FactoryGun v1. You do not n
 Every Godot and GUT fact it relies on was checked against the Godot **4.5.1-stable** binary, its class
 reference XML, and the vendored **GUT 9.5.0** source. Section L.1 lists those facts and how each was checked.
 
+v1 has shipped, and this file was then synced with the code. Where the build departed from the plan (review
+fixes, and choices the plan left open), the sections below describe what was built.
+
 Sections: 0 Overview · A Architecture · B Data model · C Graph semantics · D Bullets and effects ·
 E Editor UI · F Arena · G State machine and Main · H Progression · I Testing · J CI · K Work packages ·
 L Risks and pitfalls.
@@ -122,7 +125,7 @@ project.godot                         WP0   (A.3)
 .gitignore                            WP0   (A.3)
 .gutconfig.json                       WP0   (A.3)
 README.md                             WP4
-docs/DESIGN.md                        WP0   this file; later edits only in a separate small PR, merged before dependent WPs branch
+docs/DESIGN.md                        WP0   this file; synced with the shipped v1 code at the end (K)
 addons/gut/**                         WP0   GUT 9.5.0 vendored unmodified (241 files incl. .uid/.import)
 export_presets.cfg                    master (other workstream). Do not edit.
 .github/workflows/pages.yml           master (other workstream). Do not edit.
@@ -492,10 +495,11 @@ const OUTPUT_CELL: Vector2i = Vector2i(11, 5)
 
 var _machines: Dictionary[int, MachineInstance] = {}
 var _owner: Dictionary[Vector2i, int] = {}     # every covered cell -> machine id
-var _wires: Array[Wire] = []
+var _wires: Array[Wire] = []                    # kept in canonical order (Wire.less) after every change
 var _next_id: int = 3                           # ids grow and are never reused within a graph's life
 
 static func create_default() -> FactoryGraph    # Source + Output + belt 1:0>2:0
+# FactoryGraph.new() is an empty graph (no machines, no belts). Every real graph starts from create_default().
 
 # Queries
 func has_machine(id: int) -> bool
@@ -533,6 +537,7 @@ func disconnect_wire(w: Wire) -> GraphError.Code                 # matches by sa
 func splice_machine(kind: StringName, cell: Vector2i, w: Wire) -> int   # new id, or -1 (C.5)
 func assign_from(other: FactoryGraph) -> void   # deep copy into this instance; emits changed once
 func to_dict() -> Dictionary                    # {"next_id", "machines": [{id, kind, cell:[x,y]}], "wires": [keys]}
+	# kind is a String ("fire"), so it equals plain string literals; wires are in canonical order
 func debug_check_invariants() -> PackedStringArray   # empty when consistent (C.1 invariants)
 ```
 
@@ -584,6 +589,7 @@ class_name ShotPlan
 extends RefCounted
 ## What one trigger pull fires. Never mutated after compile; RunState replaces it on every edit.
 enum MachineStatus { ACTIVE, CAPPED, ONE_SIDED, DEAD_END, IDLE }
+const MAX_ISSUE_LINES: int = 2            # issue lines in summary_lines() before "… N more"
 var bullets: Array[BulletSpec] = []
 var statuses: Dictionary[int, MachineStatus] = {}
 var live_wire_keys: Dictionary[String, bool] = {}
@@ -596,8 +602,11 @@ func is_live_wire(w: Wire) -> bool
 func streams_on(w: Wire) -> Array[BulletSpec]   # typed copy via assign()
 func damage_per_shot() -> float           # sum of bullet damage
 func has_issue(code: PlanIssue.Code) -> bool
-func summary_lines() -> PackedStringArray # E.7 format
+func summary_lines() -> PackedStringArray # E.7 format; sorts the non-ERROR issues with PlanIssue.before itself
 ```
+
+`summary_lines()` sorts the issues it shows, so a hand-built plan with unsorted issues still prints them in
+order. A compiled plan's issues are already sorted, so its output is the same either way.
 
 ### B.7 `Inventory` and `Seeds` (WP0)
 
@@ -732,6 +741,10 @@ static func ensure_actions() -> void      # adds each missing action with the ev
 
 `FIRE` gets one `InputEventMouseButton` with `button_index = MOUSE_BUTTON_LEFT`. Every other action gets
 `InputEventKey` events with `physical_keycode` set. Physical keycodes make WASD work on AZERTY keyboards.
+
+Every event gets `device = -1` (all devices), as an `[input]` section in `project.godot` would store it. A
+new event's device is 0, and an action event with device 0 does not match a touch-emulated mouse click
+(device −1).
 
 ### B.10 `UiColors` (WP0)
 
@@ -1108,7 +1121,8 @@ tests can compute positions.
 
 ### E.2 Board rendering (Factorio look)
 
-Layers are drawn back to front:
+A frame must stay cheap however big the factory grows. So `FactoryBoard` draws on child layers, each its own
+canvas item, and redraws a layer only when what it shows changes. Back to front:
 
 1. **Floor** (`FloorLayer`). A child with `show_behind_parent = true` and mouse ignored. It draws once,
    and again on resize.
@@ -1116,40 +1130,70 @@ Layers are drawn back to front:
    - Each 40 px tile is a plate inset by 1 px. Plates alternate FLOOR_A and FLOOR_B in a checkerboard,
      and each gets a ±0.036 brightness jitter from `posmod(hash(Vector2i(x, y)), 7)`.
    - Each plate has a 1 px highlight line on its top edge.
-   - Plates where `(x + y)` is even get 4 corner bolts of radius 1.4 px.
-2. **Belts** (`BeltPainter.draw_belt`, along `BoardLayout.belt_points`):
-   - a 14 px BELT_BED bed;
-   - two RAIL polylines at ±6 px;
-   - chevrons every 12 px. On live belts they scroll at 40 px/s in BUILD and 100 px/s while locked.
-     Belts that are not live are dimmed (CHEVRON_DIM) and still;
-   - on live belts only: 8 px items every 28 px, cycling through the colours of `plan.streams_on(w)`;
+   - Plates where `(x + y)` is even get 4 corner bolts: 2.8 px STEEL squares, 4 px in from the plate's
+     corners. They are squares, not circles, because rects batch and each circle is a draw call of its own
+     (L.1 #30).
+2. **Belt beds** (the belt layer). It is redrawn only when the graph, the plan, the hovered belt, the
+   splice belt or the dragged machine changes. Along each route from `BoardLayout.belt_routes` (E.3):
+   - a 14 px RAIL band under a 10 px BELT_BED band, which leaves two 2 px rails at ±6 px
+     (`BeltPainter.draw_bed`);
+   - on belts that are not live: still CHEVRON_DIM chevrons every 12 px;
+   - dead belts are drawn first, then live ones, so live belts stay on top where routes overlap;
    - hover: a hovered belt, or the belt a palette drag would splice into, is drawn brightened (tint 1.25).
-3. **Machines** (`MachinePainter.draw_machine`). Rect = cell×40, size 80×80:
+3. **Belt flow** (the flow layer, every frame). Live belts only:
+   - CHEVRON chevrons every 12 px, scrolling at 40 px/s in BUILD and 100 px/s while locked
+     (`BeltPainter.draw_chevrons`);
+   - 8 px square items with a 1 px OUTLINE rim, every 28 px, cycling through the colours of
+     `plan.streams_on(w)` (`BeltPainter.draw_items`). A belt with no streams has no items.
+   - Each of these is one batched `draw_multiline` or `draw_multiline_colors` call per belt, sampled in one
+     walk along the route (`BeltRouter.sample_every`).
+4. **Machines** (the machine layer, redrawn with the belt layer). `MachinePainter.draw_machine`,
+   rect = cell×40, size 80×80:
    - a bevelled STEEL body inset 3 px, with a STEEL_LIGHT top and left bevel and a STEEL_DARK bottom
      and right bevel;
    - a 2 px OUTLINE;
    - a colour stripe in the kind colour, 5 px tall, near the top;
-   - 4 rivets;
-   - the procedural kind icon (E.2.1) at the centre;
+   - 4 rivets: 3.2 px RIVET squares;
+   - the procedural kind icon (E.2.1) at the centre. This cached layer leaves out icons that animate
+     (`still = true`); layer 5 draws them;
    - the short name at the bottom (size 11);
-   - a status lamp (r 4) at the top right, coloured by status (C.7);
+   - a status lamp (r 4) at the top right, coloured by status (C.7, `MachinePainter.lamp_color`);
    - the id plate "#id" for removable machines;
    - an input port marker: a dark notch with an ACCENT triangle;
    - output port markers: an ACCENT dot with an OUTLINE ring.
-   A hovered machine gets a 2 px ACCENT outline.
-4. **Gesture feedback**:
    - The machine being dragged is drawn at alpha 0.35 in its old place.
-   - A ghost (alpha 0.6) is drawn at the target cell, with a 2 px OK or ERROR outline.
-   - While a dragged machine's cursor is outside the floor, the old place gets an ERROR outline and the
-     label "RELEASE TO REMOVE".
-   - A wire preview runs from the output anchor to the snapped input or to the cursor. It is 4 px wide:
-     OK when it can connect, ERROR when refused, CHEVRON when there is no target.
-   - A refusal reason box is drawn next to the cursor and clamped inside the board. It has a PANEL_BG
-     background at 92% alpha, an ERROR border and size-12 text.
-5. **Lock overlay** (when locked):
+   - Then a **coupler** at both ends of every belt (`BeltPainter.draw_coupler`): a 10×6 rect with a 1 px
+     OUTLINE rim, CHEVRON on live belts and CHEVRON_DIM otherwise. Couplers go over the machines. They
+     mark every wired port, so a port marker without one is free. They are also all that a zero-length
+     belt between touching machines shows.
+5. **Flames** (the flame layer, every frame): the Fire icons (`MachinePainter.draw_machine_icon`).
+6. **Hover and gesture feedback** (the board's own `_draw`, every frame):
+   - A hovered machine, or a hovered input port, gets a 2 px ACCENT outline on its machine. A hovered
+     output port gets an ACCENT ring (r 8) around its marker.
+   - A ghost (alpha 0.6, IDLE lamp, no id plate) is drawn at the target cell, with a 2 px OK or ERROR
+     outline. Machine drags and palette drops both use it.
+   - While a dragged machine's cursor is outside the floor, the old place gets a 2 px ERROR outline. A
+     removable machine also gets the label "RELEASE TO REMOVE" (size 11, ERROR) on a 120×18 PANEL_BG box at
+     92% alpha, centred on the machine and kept inside the board. The Source and Output show the refusal
+     box instead.
+   - A wire preview: a straight 4 px line from the output anchor to the snapped input anchor or to the
+     cursor. It is OK when it can connect, ERROR when refused, CHEVRON when there is no target.
+   - A refusal reason box: PANEL_BG at 92% alpha, a 1 px ERROR border and size-12 TEXT. It sits below and
+     right of the cursor by a gap: 14 px for board gestures (`CURSOR_GAP`), 44 px for a palette drop
+     (`PREVIEW_GAP`, which keeps it clear of the 80×80 drag preview centred on the cursor). It flips above
+     the cursor when there is no room below, and is then moved inside the board.
+7. **Lock overlay** (the lock layer, redrawn by `set_locked`; drawn only when locked):
    - PANEL_BG at 45% alpha;
-   - HAZARD diagonal stripe bands, 14 px tall, at the top and bottom;
+   - HAZARD diagonal stripes on OUTLINE bands, 14 px tall, at the top and bottom;
    - the lock text (for example "LOCKED · WAVE 3 IN PROGRESS"), centred, size 20, HAZARD.
+
+**Draw order matches hit order.** Belts lie under the machines, so a belt that crosses a machine it is not
+wired to runs beneath it, and `hit_test` (PORT > MACHINE > BELT, E.3) finds what is on top. Couplers sit on
+port anchors, where `hit_test` finds the port first. A known limit: an unwired machine moved onto a belt's
+line looks spliced in. Only its missing couplers, its grey lamp and the hover text show that it is not.
+
+**Cost.** With a renderer, Main idle on the default board takes about 73 draw calls a frame (502 when the
+bolts and rivets were circles). `test_default_board_stays_in_its_draw_call_budget` keeps it under 150.
 
 #### E.2.1 Icons (`MachinePainter.draw_icon`, frozen WP3 → WP4 contract)
 
@@ -1175,10 +1219,26 @@ Each icon is about 2·s wide, built from `draw_*` primitives:
 | Pierce | A plate with an arrow through it. |
 | Splitter | A Y-fork with a hub dot. |
 
+The rest of `MachinePainter` (WP3 only, not part of the WP4 contract):
+
+```gdscript
+static func draw_machine(ci: CanvasItem, kind: StringName, rect: Rect2, id: int, status: ShotPlan.MachineStatus,
+		alpha: float, t: float, still: bool = false) -> void
+	# rect: the 80x80 machine rect; id <= 0 (a ghost) draws no id plate; still = true leaves out an icon that animates
+static func draw_machine_icon(ci: CanvasItem, kind: StringName, rect: Rect2, alpha: float, t: float) -> void
+static func animates(kind: StringName) -> bool              # true only for the Fire flame
+static func lamp_color(status: ShotPlan.MachineStatus) -> Color   # the C.7 lamp colours
+```
+
+`BeltPainter` draws a belt in parts, so the board can cache the still bed: `draw_bed(ci, points, hovered)`,
+`draw_chevrons(ci, points, scroll, color)`, `draw_items(ci, points, scroll, item_colors, hovered)`,
+`draw_coupler(ci, anchor, live)` and `tint(c, hovered)`.
+
 ### E.3 Geometry (pure, static)
 
 `BoardLayout`. Constants: `TILE 40`, `MACHINE_SIZE (80,80)`, `PORT_HIT 12`, `MAGNET 24`, `BELT_HIT 8`,
-`SPLICE 10`, `DRAG_THRESHOLD 6`.
+`SPLICE 20` (`TILE / 2`), `DRAG_THRESHOLD 6`. `SPLICE` is the band in which `drop_cell` puts a dropped
+machine's ports onto a belt, so a drop that lands on a belt always splices into it.
 
 ```gdscript
 static func bounds() -> Rect2                                   # (0,0,560,480)
@@ -1191,10 +1251,12 @@ static func port_anchor(graph: FactoryGraph, ref: PortRef) -> Vector2
 static func ports_of(graph: FactoryGraph, id: int) -> Array[PortRef]
 static func drop_cell(center: Vector2) -> Vector2i
 	# Vector2i((center / 40 - (1, 1)).round()) clamped to [0, 12] x [0, 10]
-static func belt_points(graph: FactoryGraph, w: Wire) -> PackedVector2Array   # via BeltRouter.route
+static func belt_points(graph: FactoryGraph, w: Wire) -> PackedVector2Array   # w's route in belt_routes(graph)
+static func belt_routes(graph: FactoryGraph) -> Dictionary[String, PackedVector2Array]
+	# Wire.key() -> route for every belt: BeltRouter.route, then kept off the other belts' lines ("Belt tracks")
 static func hit_test(graph: FactoryGraph, p: Vector2) -> BoardHit
 	# OUTSIDE if not in bounds; else PORT (nearest anchor within 12 px; ties: output beats input)
-	# > MACHINE (cell owner) > BELT (nearest within 8 px; ties: canonical wire order) > EMPTY
+	# > MACHINE (cell owner) > BELT (nearest within 8 px of its belt_routes route; ties: canonical wire order) > EMPTY
 static func belt_at(graph: FactoryGraph, p: Vector2, max_dist: float) -> Wire
 static func nearest_input(graph: FactoryGraph, p: Vector2, max_dist: float, exclude_id: int) -> PortRef
 ```
@@ -1214,8 +1276,9 @@ static func route(a: Vector2, b: Vector2, from_rect: Rect2, to_rect: Rect2, lane
 	# 1. same y and b.x >= a.x                 -> [a, b]
 	# 2. b.x - a.x >= 2*STUB (Z route)         -> mx = clamp(snappedf((a.x+b.x)/2, STUB) + lane, a.x+STUB/2, b.x-STUB/2)
 	#                                             [a, (mx, a.y), (mx, b.y), b]
-	# 3. otherwise (around)                    -> x1 = a.x+STUB, x2 = b.x-STUB; lane_y = midpoint of the vertical gap
-	#    between the rects, or (if they overlap vertically) min(max bottom + STUB, bounds.end.y - 6); lane_y += lane
+	# 3. otherwise (around)                    -> x1 = min(a.x+STUB, bounds.end.x-6), x2 = max(b.x-STUB, bounds.position.x+6);
+	#    lane_y = midpoint of the vertical gap between the rects, or (if they overlap vertically)
+	#    min(max bottom + STUB, bounds.end.y - 6); lane_y += lane
 	#                                             [a, (x1,a.y), (x1,lane_y), (x2,lane_y), (x2,b.y), b]
 static func lane_offset(from_port: int, port_count: int) -> float
 	# (float(from_port) - (port_count - 1) / 2.0) * LANE_STEP: -4 and +4 for a Splitter, 0 for one output.
@@ -1223,14 +1286,40 @@ static func lane_offset(from_port: int, port_count: int) -> float
 static func length(points: PackedVector2Array) -> float
 static func distance_to(points: PackedVector2Array, p: Vector2) -> float   # Geometry2D.get_closest_point_to_segment per segment
 static func sample(points: PackedVector2Array, d: float) -> Array[Vector2] # [position, unit direction] at arc length d (clamped)
+static func sample_every(points: PackedVector2Array, first: float, step: float) -> PackedVector2Array
+	# flattened [position, unit direction] pairs at arc lengths first, first + step, ... in one walk; step > 0
 ```
+
+**Edge ports.** `x1` and `x2` are clamped like `lane_y`. An output in column 12 or an input in column 0 has
+no room for a stub on the clipped board, so its leg runs along the machine's own edge, under the machine.
+The port markers and couplers are drawn over it, and hit-test as ports.
+
+**Belt tracks.** `BeltRouter.route` routes one belt on its own, so two unrelated belts could run along one
+line, or meet end to end, and show a connection that does not exist. `belt_routes(graph)` prevents that:
+
+1. It routes every belt with `BeltRouter.route`.
+2. It places the straight (2-point) belts first, because they cannot move.
+3. Then, in canonical wire order, it moves each bent belt's inner legs one at a time. Each goes to the
+   first of 0, +1, −1, +2, −2 lanes (`LANE_STEP` 8 px) where that leg, the leg before it and (for the last
+   inner leg) the last stub clash least with legs already placed. A clash is an overlap or a touch on the
+   same line.
+4. A moved leg stays on the floor (`bounds()` grown by −6 px) and leaves at least `STUB / 2` of stub at a
+   port. Stubs never move.
+
+`belt_points`, `belt_at`, `hit_test` and the board's drawing all use these routes, so hover, X and
+right-click match what is drawn. Known limits (a `shortcut:` comment in `_off_lines`): the search stops at
+±2 lanes and stubs never move, so a very crowded gap can still put two belts on one line; a moved leg can
+run parallel to a Splitter's ±4 lane 4 px away, which is not a clash. Cost on a board of 30–35 belts
+(headless): `belt_routes` about 2 ms, `hit_test` about 0.8 ms. The board caches the routes it draws and
+rebuilds them only when the graph or the plan changes; `hit_test` and `belt_at` recompute them per call.
 
 Small value types:
 
 - `PortRef(machine_id, port, is_output)` with `make()` and `equals()`.
 - `BoardHit(type: EMPTY|PORT|MACHINE|BELT|OUTSIDE, machine_id, port: PortRef, wire: Wire)` with
   `make()` and `same_as()`.
-- `DropPreview(kind, cell, valid, splice: Wire, reason)`.
+- `DropPreview(kind, cell, valid, splice: Wire, reason)` with
+  `make(p_kind, p_cell, p_valid, p_splice, p_reason)`.
 - `BoardAction(type: NONE|PLACE|MOVE|REMOVE|CONNECT|DISCONNECT, kind, machine_id, cell, splice, from, to, wire, refusal)`.
   Constructors: `none(refusal = "")`, `make_place`, `make_move`, `make_remove`, `make_connect` and
   `make_disconnect`. They use the `make_` prefix because `Object` already has `connect` and
@@ -1250,7 +1339,7 @@ any --cancel() / set_locked(true) / RMB press while not IDLE--> IDLE
 
 | Gesture | Result |
 |---|---|
-| Drag a palette slot onto the board | PLACE at `drop_cell(cursor)`. If a belt is within 10 px of the cursor and `can_splice` is OK, the placement splices into that belt. |
+| Drag a palette slot onto the board | PLACE at `drop_cell(cursor)`. If a belt is within `SPLICE` (20 px) of the cursor and `can_splice` is OK, the placement splices into that belt. |
 | Drag a machine; release on the floor | MOVE to `ghost_cell()`; belts follow. If invalid: refused with the reason, and the machine stays. |
 | Drag a machine; release outside the floor | REMOVE (refund). For the Source or Output: refused with the NOT_REMOVABLE text. |
 | Drag from an output port; release with an input port within 24 px (magnet, own machine excluded) | CONNECT (replaces that output's old belt). If refused: the reason, plus " This belt would make N." for TOO_MANY_BULLETS. |
@@ -1258,7 +1347,7 @@ any --cancel() / set_locked(true) / RMB press while not IDLE--> IDLE
 | Right-click a machine, its input port, or an output port with no belt | REMOVE (refund), or the NOT_REMOVABLE refusal. |
 | Right-click a belt, or an output port that carries a belt | DISCONNECT that belt. |
 | Right press while a gesture runs (PRESS_MACHINE, DRAG_MACHINE, DRAG_WIRE) | `cancel()`; nothing else. |
-| Delete or X key | The same as a right-click on the currently hovered thing. |
+| Delete or X key | `secondary(hover)`: the same as a right-click on the currently hovered thing. While locked it gives the LOCKED refusal over a belt, port or machine, and nothing over empty floor. |
 | Escape | `cancel()`. During a palette drag, Godot itself cancels the drag on Escape (built-in `ui_cancel`) and consumes the key, so nothing needs coding (verified). |
 | Mouse wheel, or any button other than left and right | Nothing: `press()` returns `BoardAction.none()` without a refusal, also while locked. |
 | A left or right press while locked | Refused with the LOCKED text. |
@@ -1289,8 +1378,8 @@ func motion(p: Vector2) -> void           # sets cursor = p; IDLE: refresh_hover
 func release(p: Vector2) -> BoardAction   # sets cursor = p; left button only; none() in IDLE
 func refresh_hover() -> void              # hover = hit_test(graph, cursor) if IDLE and cursor in bounds(), else BoardHit.new()
 func secondary(hit: BoardHit) -> BoardAction   # right-click / Delete semantics (table above)
-	# BELT, or an output PORT with a belt -> DISCONNECT that belt; MACHINE or any other PORT -> REMOVE its
-	# machine (or the NOT_REMOVABLE refusal); EMPTY / OUTSIDE -> none()
+	# EMPTY / OUTSIDE -> none(), also while locked; locked -> the LOCKED refusal; BELT, or an output PORT with
+	# a belt -> DISCONNECT that belt; MACHINE or any other PORT -> REMOVE its machine (or the NOT_REMOVABLE refusal)
 func ghost_cell() -> Vector2i             # drop_cell(cursor - drag_grab + MACHINE_SIZE / 2)
 func ghost_valid() -> bool
 func is_drag_outside() -> bool            # DRAG_MACHINE and cursor not in BoardLayout.bounds()
@@ -1348,11 +1437,19 @@ Input routing:
     ghost and the reason).
   - `func _drop_data(at: Vector2, data: Variant) -> void` applies `interaction.drop(kind, at)`.
 - `_process`:
-  - advances the belt scroll and the icon time, then calls `queue_redraw()`;
+  - advances the belt scroll and the icon time;
   - clears the stored drop preview when `!get_viewport().gui_is_dragging()` or when the mouse is
-    outside the board rect.
+    outside the board rect;
+  - redraws the belt and machine layers when the dragged machine, the hovered belt or the splice belt has
+    changed since their last redraw;
+  - queues the flow layer, the flame layer and the board itself (`queue_redraw()`) every frame (E.2).
+- A graph change (`_on_graph_changed`), `bind` and `set_plan` rebuild the cached belt draw order (dead
+  belts first), the routes (`BoardLayout.belt_routes`) and the item colours, then redraw the static layers.
 - `mouse_exited`, when the mode is IDLE, sets `interaction.cursor = Vector2(-1, -1)` and calls
   `refresh_hover()`, so a later graph change cannot re-hover a point the mouse has left.
+- **Focus loss.** `_notification` calls `cancel_interaction()` on `NOTIFICATION_WM_WINDOW_FOCUS_OUT` and
+  `NOTIFICATION_APPLICATION_FOCUS_OUT`. Losing focus drops the board's mouse focus, and no release reaches
+  `_gui_input` after that, so without this a ghost would follow a cursor with no button held.
 
 ### E.6 Palette (`PaletteSlot`, 72×88, mouse STOP)
 
@@ -1394,14 +1491,15 @@ How a slot is drawn:
 
 ### E.7 Shot readout (`ShotReadout`, 560×214)
 
-The readout has two parts:
+The readout draws its own background (STEEL_DARK with a 2 px PANEL_EDGE border) and has two parts:
 
 - **Text.** A Label at (8, 6), size 420×204, font size 12, `clip_text = true`, and
   `add_theme_constant_override("line_spacing", 0)`. Its text is `"\n".join(plan.summary_lines())`.
   The font is 17 px high at size 12, and the default theme adds `line_spacing = 3`, so without the
   override each line takes 20 px. `clip_text` clips only horizontally: a taller text grows the label
   past the panel (verified).
-- **Fan diagram.** A 120×120 box at (432, 45) with a PANEL_EDGE border and the title "FAN".
+- **Fan diagram.** A 120×120 box at (432, 45) with a 1 px PANEL_EDGE border and the caption "FAN" (size 11,
+  TEXT_DIM) just above it.
   - The origin is at (10, 60) inside the box.
   - For each bullet, draw a 2 px ray, 100 px long, at its `angle_offset`, in its `primary_color()`.
   - At the end of each ray, draw a dot with radius `clamp(spec.radius, 3, 10)`.
@@ -1412,7 +1510,7 @@ The readout has two parts:
    `"%d bullet%s/shot · %d shots/s · %.1f dmg/shot"`, for example
    `"2 bullets/shot · 4 shots/s · 14.0 dmg/shot"`.
 2. One row per bullet: `"#%d " + describe()`.
-3. Up to 2 non-ERROR issue lines, each `"! " + text`.
+3. Up to `MAX_ISSUE_LINES` (2) non-ERROR issue lines, in `PlanIssue.before` order, each `"! " + text`.
 4. If there are more non-ERROR issues, `"… %d more"`, where `%d` counts the ones not shown.
 
 The worst case is 12 lines (1 + 8 + 2 + 1). With `line_spacing` 0 they measure 204 px, which fits the
@@ -1430,13 +1528,15 @@ the first of these that applies:
 
 1. A message from `show_message(text, is_error)`. It lasts 2.5 s, in ERROR (if `is_error`) or TEXT
    colour. Board refusals and RunState refusals both use it.
-2. Something hovered on the board:
-   - Machine, or its input port: `"<display_name> #<id>: <description>"`, plus `"  [capped]"`,
-     `"  [one-sided]"`, `"  [dead end]"` or `"  [idle]"` when the status is not ACTIVE. The Source and
-     Output omit `#id`.
+2. Something hovered on the board (TEXT colour):
+   - Machine, or its input port: `"<display_name> #<id>: <description>"`. When the status is not ACTIVE,
+     a tag goes before the colon: `"Splitter #3 [one-sided]: Forks the stream: …"`. The tags are
+     `[capped]`, `[one-sided]`, `[dead end]` and `[idle]`. The tag comes first because the label trims the
+     end, and the Splitter's description alone overruns it. The Source and Output omit `#id`.
    - Output port (with or without a belt): "Output port: drag to an input port to connect."
    - Belt: "Belt: right-click or X to cut."
-3. If Start is disabled in BUILD: `start_reason()`.
+3. If the editor is not locked and Start is disabled: `start_reason()`, in WARN. (The panel cannot see
+   `GameFlow`, so "not locked" stands for BUILD.)
 4. Otherwise: "Drag machines onto the floor. Drag from an output port to wire. Right-click removes."
    (TEXT_DIM).
 
@@ -1471,9 +1571,12 @@ func show_message(text: String, is_error: bool) -> void
 - Default font size 14.
 - `Button` normal: STEEL with an OUTLINE border. Hover: STEEL_LIGHT. Pressed: STEEL_DARK with an ACCENT
   border. Disabled: STEEL_DARK with a STEEL border. Focus: `StyleBoxEmpty`.
-- Button font colours: TEXT; pressed ACCENT; disabled TEXT_DIM.
+- Button font colours: TEXT, also for hover and focus; ACCENT for pressed and hover-pressed; TEXT_DIM for
+  disabled. So a hovered or focused button never falls back to engine colours.
 - `Label` font colour: TEXT.
 - `Panel` and `PanelContainer`: PANEL_BG with a PANEL_EDGE border.
+- `TooltipPanel`: the same opaque PANEL_BG box with a PANEL_EDGE border, and `TooltipLabel` font colour TEXT.
+  Godot's default tooltip panel is 50% black, which let the palette show through the text.
 - Every box: border 2, corner radius 2, content margins 8/4.
 
 ---
@@ -1542,9 +1645,13 @@ The number of live bullets needs no cap: at most `ceil(1.4 / 0.25) · 8 = 48` bu
 - **Movement:** each enemy moves straight toward the player at `speed · status.speed_multiplier()`.
 - **Separation:** for each overlapping pair, push each enemy apart by `SEPARATION / 2` = 25% of the
   overlap per step, so the pair loses half its overlap. This is O(n²), with n ≤ 40.
-- **Contact:** an enemy within `r + 13` of the player does `contact_damage` if the player is not
+- **Contact:** a live enemy within `r + 13` of the player does `contact_damage` if the player is not
   invulnerable, which also starts the 0.6 s invulnerability. The enemy is always pushed 30 px directly
   away from the player.
+- **Live** means `hp > 0` at that point of the step. An enemy killed earlier in the same step (by a bullet
+  or a DoT tick) neither separates nor touches the player; step 6 removes it.
+- When two centres coincide, a push (separation or contact) uses `Vector2.RIGHT`, so the result stays
+  deterministic.
 - **Wave composition** for wave `w`:
   - Grunts: `4 + 2w`.
   - Runners: `2(w − 1)`.
@@ -1568,8 +1675,8 @@ time += delta
               if intent.fire and plan.is_valid() and cooldown <= 1e-6:
                   fire every bullet of the plan (F.2), emit one SHOT, cooldown = Tuning.GUN_INTERVAL
 4. bullets  - D.4; emit HIT.
-5. enemies  - for each live enemy: hp -= status.tick(delta); move toward the player.
-              Then separation, then contact (emit PLAYER_HIT on damage).
+5. enemies  - for each live enemy (hp > 0): hp -= status.tick(delta); move toward the player.
+              Then separation, then contact, both for enemies still live (emit PLAYER_HIT on damage).
 6. deaths   - remove enemies with hp <= 0 in id order; kills += 1; emit KILL.
 7. end      - if player.hp <= 0: hp = 0, finished, emit PLAYER_DIED (death wins over clear).
               elif all spawned and no enemies: clear_timer += delta; at >= 1.0 s: finished, emit WAVE_CLEARED.
@@ -1578,11 +1685,15 @@ return events
 
 `enemies` stays sorted by id: new ids only grow, and removal keeps the order.
 
+A killed enemy does no contact damage, and a clear needs 1 s with no enemies. So in play a death and a clear
+cannot happen in the same step; `test_death_wins_over_clear` forces that case.
+
 ### F.5 Sim API (WP2, all `extends RefCounted`)
 
 ```gdscript
-class_name EnemyType          # enum Kind { GRUNT, RUNNER, BRUTE }; display_name, max_hp, speed, radius,
+class_name EnemyType          # enum Kind { GRUNT, RUNNER, BRUTE }; kind, display_name, max_hp, speed, radius,
                               # contact_damage, sides, color; static func get_type(kind: Kind) -> EnemyType
+                              # (kind lets ArenaView turn the Runner toward the player)
 class_name WavePlan           # static func counts(wave: int) -> Dictionary[EnemyType.Kind, int]
                               # static func order(wave: int, rng: RandomNumberGenerator) -> Array[EnemyType.Kind]
                               # static func spawn_time(wave: int, index: int) -> float
@@ -1593,7 +1704,10 @@ class_name PlayerIntent       # var move: Vector2, aim: Vector2, fire: bool
 class_name SimEvent           # enum Type { SHOT, HIT, KILL, PLAYER_HIT, WAVE_CLEARED, PLAYER_DIED }
                               # var type: Type, pos: Vector2, color: Color, entity_id: int
                               # static func make(p_type: Type, p_pos: Vector2, p_color: Color = Color.WHITE, p_entity_id: int = -1) -> SimEvent
-                              # HIT: colour = bullet primary colour, id = enemy; KILL: colour = enemy colour
+                              # SHOT: pos = muzzle, colour = the first bullet's primary colour
+                              # HIT: colour = bullet primary colour, id = enemy; KILL: colour = enemy colour, id = enemy
+                              # PLAYER_HIT: pos = player, colour and id of the enemy that touched the player
+                              # WAVE_CLEARED, PLAYER_DIED: pos = player, default colour and id
 class_name PlayerState        # var pos: Vector2, hp: float, invuln: float, aim_dir: Vector2 = Vector2.RIGHT
 class_name EnemyState         # var id: int, type: EnemyType, pos: Vector2, hp: float, max_hp: float, speed: float,
                               # status: StatusEffects; func radius() -> float
@@ -1710,7 +1824,8 @@ SimEvents and aged in `_process`. They are purely visual and not part of the sim
   at y 860.
 
 API: `set_wave(wave: int, running: bool)`, `set_stats(hp: float, enemies_left: int)` and
-`show_banner(text: String)`.
+`show_banner(text: String)`. `Hud` keeps its state in public fields, which tests read: `wave`, `running`,
+`hp`, `enemies_left`, `banner_text` and `banner_left` (seconds the banner still shows).
 
 ---
 
@@ -1837,38 +1952,49 @@ Node, so there are no reference cycles.
 class_name RewardOverlay
 extends Control                           # mouse STOP; draws itself
 signal offer_chosen(index: int)
+const DIM: Color = Color(0, 0, 0, 0.55)
+const TEXT_WIDTH: float = 230.0           # card text is centred in this width
+const ICON_SIZE: float = 26.0
 var offers: Array[RewardOffer] = []
-func show_offers(p_offers: Array[RewardOffer], wave_cleared: int) -> void   # visible = true
+func show_offers(p_offers: Array[RewardOffer], wave_cleared: int) -> void   # offers.assign(p_offers) (a copy); visible = true
 func choose(index: int) -> void           # only if visible and index valid: hide, then emit offer_chosen(index)
 func card_rect(index: int) -> Rect2       # Rect2(90 + 280*index, 290, 260, 320), overlay-local
+func _card_at(p: Vector2) -> int          # the card under p, or -1
 
 class_name GameOverOverlay
 extends Control                           # mouse STOP
 signal restart_requested
+const DIM: Color = Color(0, 0, 0, 0.55)
 var restart_button: Button                # "RESTART  [R]", 200x44 at (400, 440), FOCUS_NONE
+var result_text: String = ""              # set by show_result(), drawn by _draw(); tests read it
 func show_result(waves_cleared: int, kills: int) -> void
 ```
 
-**Reward overlay drawing:**
+Each overlay has its own `DIM`: `UiColors` is a WP0 file.
+
+**Reward overlay drawing** (every "at y" value is a text baseline):
 
 - A full-rect dim: black at 55% alpha.
 - Title: `"WAVE %d CLEARED"` (size 32, ACCENT) at y 220.
-- Subtitle: `"Choose one machine · +25 HP"` (size 16) at y 255.
+- Subtitle: `"Choose one machine · +%d HP"` with `Tuning.HEAL_ON_REWARD` (so "+25 HP"; size 16) at y 255.
 - Three cards. Each card has:
-  - a STEEL_DARK box with a PANEL_EDGE border (ACCENT on hover);
+  - a STEEL_DARK box with a 2 px PANEL_EDGE border, ACCENT while the mouse is over the card (`_draw()` reads
+    `get_local_mouse_position()`);
   - the icon at 80 px from the top (`MachinePainter.draw_icon`, s = 26, `t` = the overlay's own time,
     accumulated from `delta` in `_process`, which also calls `queue_redraw()` while visible);
   - the name (size 22) at +150;
   - `"×%d"` (size 28, ACCENT) at +190;
-  - the description (`draw_multiline_string`, width 230, size 13) at +220;
+  - the description (`draw_multiline_string`, width 230, size 13, TEXT) at +220;
   - `"[%d]"` (size 14, TEXT_DIM) at +300.
+  - All card text is centred in a 230 px column (`TEXT_WIDTH`) in the middle of the card.
 - A left click inside `card_rect(i)` (`_gui_input`) calls `choose(i)`.
 
 **Game over overlay drawing:**
 
 - The same dim.
 - `"GAME OVER"` (size 48, ERROR) at y 330.
-- `"Survived %d wave%s · %d kills"` (size 18) at y 390.
+- `result_text` (size 18) at y 390: `"Survived %d wave%s · %d kill%s"`, so "1 wave · 1 kill" and
+  "2 waves · 6 kills".
 
 ---
 
@@ -1949,6 +2075,12 @@ bot with the default gun clears waves 1 and 2, and a player who does nothing die
     script). Without the hook a file that fails to parse is skipped and the run still exits 0 with
     "Nothing was run." (verified), so check that the summary says `Scripts 1`. Full-suite runs keep the
     default config.
+- **The renderer-only test.** `test_default_board_stays_in_its_draw_call_budget` needs real draw calls, and
+  the headless dummy renderer counts none (L.1 #30). So a headless run, CI's included, marks it pending:
+  the full suite reports 1 pending test and still exits 0. Run it alone with a renderer, for example under
+  Xvfb:
+  `xvfb-run -a -s '-screen 0 1600x900x24' godot --rendering-driver opengl3 -s addons/gut/gut_cmdln.gd -gconfig= -gtest=res://test/integration/test_main.gd -gunit_test_name=draw_call_budget -gexit`.
+  Run only that test this way: the real-mouse tests hold only in headless runs (I.2.8).
 
 ### I.2 Test-writing rules (each one comes from a verified GUT 9.5.0 or Godot 4.5.1 behaviour, see L.1)
 
@@ -1974,6 +2106,8 @@ bot with the default gun clears waves 1 and 2, and a player who does nothing die
      mouse position is updated.
    - Keep every position at **x < 950**: GUT's own panel covers x 963–1595 during a run.
    - The real mouse is needed only for drag-and-drop and board gestures.
+   - These helpers hold only in headless runs. Under a real X11 display (Xvfb), a palette drop lands
+     under the real X pointer instead (L.1 #29).
 9. **Keys:** call `main._unhandled_input(event)` directly with an `InputEventKey` (`physical_keycode`,
    `pressed = true`). This avoids depending on GUT's GUI focus.
 10. **Floats:** use `assert_almost_eq(got, expected, 1e-4)`.
@@ -2117,7 +2251,8 @@ assigned in order from 3.
 ```gdscript
 extends RefCounted
 static func chain(kinds: Array[StringName]) -> FactoryGraph
-	# Source -> kinds[0] -> ... -> Output (default belt removed); machine i at chain_cell(i)
+	# Source -> kinds[0] -> ... -> Output; machine i at chain_cell(i). Connecting Source:0 to the first machine
+	# replaces the default belt (C.2), so nothing removes it explicitly; chain([]) is the default graph.
 static func chain_cell(i: int) -> Vector2i          # Vector2i(3 + 2 * (i % 4), 1 + 3 * (i / 4)): up to 16 machines
 static func split(upper: Array[StringName], lower: Array[StringName]) -> FactoryGraph
 	# Source -> Splitter (id 3, cell (3,5)); port 0 -> upper[i] at (5 + 2i, 2) -> Output;
@@ -2234,6 +2369,10 @@ static func click(t: GutTest, pos: Vector2, index: MouseButton = MOUSE_BUTTON_LE
   - `test_live_ids_excludes_dead_end_and_idle`.
   - `test_assign_from_and_to_dict`.
   - `test_wire_key_and_canonical_order`.
+  - `test_error_texts`: `GraphError.describe` for every code, including the TOO_MANY_BULLETS text built
+    from `Tuning`.
+  - `test_invariant_check_reports_corruption`: writes private fields to check that
+    `debug_check_invariants` reports each kind of corruption.
   - Every mutating test also asserts `debug_check_invariants().is_empty()`.
 - `test/unit/core/test_bullet_spec.gd`:
   - `test_base_stats`.
@@ -2342,13 +2481,23 @@ static func click(t: GutTest, pos: Vector2, index: MouseButton = MOUSE_BUTTON_LE
   - `test_hit_applies_damage_and_status`.
   - `test_pierce_hits_n_plus_one_in_order`.
   - `test_bullet_hits_each_enemy_once`.
+  - `test_bullets_expire_or_leave_the_arena`.
+  - `test_enemies_separate`.
   - `test_ice_slows_movement`.
   - `test_dot_kills_count`.
   - `test_contact_damage_and_invulnerability`.
   - `test_spawns_outside_and_away_from_player`.
+  - `test_spawns_follow_the_schedule`: waves 1 and 10. Each spawn brings exactly one enemy, never before
+    `1.0 + k · spawn_interval(w)`, and on the first step at or after that time (wave 10 also meets the
+    40-enemy cap).
   - `test_live_enemy_cap`.
   - `test_wave_clears_after_grace`.
-  - `test_death_wins_over_clear`.
+  - `test_wave_clear_waits_for_every_spawn`: an empty field before the next spawn does not clear, and the
+    1 s grace counts from the last kill.
+  - `test_death_wins_over_clear`: play cannot reach this step (F.4), so it runs two identical worlds and
+    sets the player's HP to 0 on the step where the other world clears. It also covers a normal contact
+    death.
+  - `test_begin_wave_on_a_used_world_starts_fresh`: the gun cooldown and the clear timer reset.
   - `test_determinism_same_seed_same_hash_different_seed_differs`. It also takes weakrefs of the world,
     its player and every live enemy and bullet after some seconds of firing, drops the world, and asserts
     every `get_ref()` is null.
@@ -2364,6 +2513,13 @@ static func click(t: GutTest, pos: Vector2, index: MouseButton = MOUSE_BUTTON_LE
   - `test_go_idle_resets`.
   - `test_render_smoke`: every enemy type with every status, bullets and FX, drawn for 2 frames with no
     errors.
+  - `test_physics_tick_reads_real_input`: real W, left-button and mouse-motion events through
+    `_physics_process`. W moves up, the aim follows the local mouse, a held fire shoots, and nothing
+    fires while the cursor is over the editor.
+  - `test_effects_and_banner_expire`: the muzzle flash, the hit flash, the HIT and KILL rings and the
+    edge flash expire; the banner fades out over its last 0.5 s.
+  - `test_arena_and_hud_repaint`: the view draws every frame while running; the HUD draws once per HP
+    change.
 
 **WP3**
 
@@ -2372,15 +2528,24 @@ static func click(t: GutTest, pos: Vector2, index: MouseButton = MOUSE_BUTTON_LE
   - `test_drop_cell_rounds_and_clamps`.
   - `test_hit_test_priority`: includes adjacent machines (`Fixtures.chain([FIRE, ICE])`, ids 3 at (3,1)
     and 4 at (5,1)): the shared anchor (200, 80) hits the output PortRef of #3, and `secondary()` on that
-    hit gives DISCONNECT of `3:0>4:0`.
-  - `test_belt_at_and_input_magnet`.
+    hit gives DISCONNECT of `3:0>4:0`. The same holds with the machines placed in the reverse order. A
+    machine beats a belt running under it, and a column-12 Splitter's port 1 hits as a PORT over its own
+    edge-clamped belt.
+  - `test_belt_at_and_input_magnet`: `belt_at` with `SPLICE` finds a belt 20 px away, not 21 px.
+  - `test_unrelated_belts_keep_their_own_tracks`: two layouts where routes alone would share a line give
+    the exact adjusted routes; each belt hit-tests on its own leg; the board draws `belt_points`.
+  - `test_belt_routes_move_off_placed_legs`: straight belts go first, clashes count the first and last
+    stubs, and moves keep to the lane bounds and the ±2 search.
 - `test/unit/ui/test_belt_router.gd`:
   - `test_straight`.
   - `test_z_route_snapped_and_clamped`.
   - `test_backward_route_goes_around`.
+  - `test_edge_ports_stay_on_the_floor`: Fire at (0,8) and Ice at (12,9) give exact routes with every
+    point inside the bounds; a column-11 stub keeps its full `STUB`.
   - `test_splitter_lanes_differ`: `lane_offset` is exactly −4.0 and +4.0 for a Splitter's ports, and 0.0
     for a single output.
   - `test_distance_to`.
+  - `test_sample_every_walks_once_like_sample`.
 - `test/unit/ui/test_board_interaction.gd`:
   - `test_drag_machine_moves_it`.
   - `test_small_motion_is_not_a_drag`.
@@ -2394,22 +2559,35 @@ static func click(t: GutTest, pos: Vector2, index: MouseButton = MOUSE_BUTTON_LE
     remove; a wheel press (`MOUSE_BUTTON_WHEEL_UP`) returns `none()` with no refusal over a machine,
     unlocked and locked; a right press during DRAG_WIRE and during DRAG_MACHINE cancels to IDLE with
     `none()`.
-  - `test_drop_preview_place_splice_and_reasons`.
+  - `test_drop_preview_place_splice_and_reasons`: drops from 19 px above to 19 px below a belt all
+    splice; 21 px off gives a plain placement.
   - `test_locked_refuses_everything`.
 - `test/unit/ui/test_factory_panel.gd`:
-  - `test_render_smoke_all_statuses`.
+  - `test_render_smoke_all_statuses`: also live and dead zero-length belts, and the opaque tooltip theme.
   - `test_palette_states`.
   - `test_start_button_state_and_text`.
+  - `test_readout_fits_the_worst_case`: 8 fully modded bullets and 5 IDLE issues give 12 lines, all
+    visible, in the 420×204 label.
   - `test_message_expires`.
   - `test_hover_refreshes_after_graph_change`: hover machine #3 through `board.interaction.motion()`,
     remove it through the graph with no motion, then assert `interaction.hover` no longer names #3 and a
     redraw (`await wait_process_frames(2)`) raises no error. The same after `assign_from` (restart).
+  - `test_board_layers_and_what_redraws`: the layer order (E.2), dead belts before live ones; the board,
+    flow and flame layers draw every frame; the static layers redraw only on a hover, graph or drag
+    change, and the lock layer only on `set_locked`.
+  - `test_refusal_box_and_remove_label_stay_clear_and_inside`: the refusal box never meets the 80×80 drop
+    preview and stays inside the board; the "RELEASE TO REMOVE" label stays inside it too.
   - Real mouse:
+    - `test_locking_cancels_a_palette_drag`: the drop preview exists only while the cursor is on the
+      board; locking cancels the drag and places nothing.
     - `test_palette_drag_places_on_board`: drag slot 0 (Fire) to board cell (5,1), giving
       `place_requested(MachineCatalog.FIRE, Vector2i(5, 1), null)`.
-    - `test_palette_drag_onto_belt_splices`.
+    - `test_palette_drag_onto_belt_splices`: also when dropped 14 px off the belt.
     - `test_wire_drag_emits_connect`.
     - `test_machine_drag_off_floor_emits_remove`.
+    - `test_machine_drag_on_floor_emits_move`.
+    - `test_focus_loss_ends_a_board_gesture`: a focus-out notification ends a DRAG_MACHINE and a
+      DRAG_WIRE, and the later release emits nothing.
     - `test_right_click_belt_emits_disconnect`.
 
 **WP4**
@@ -2420,20 +2598,35 @@ static func click(t: GutTest, pos: Vector2, index: MouseButton = MOUSE_BUTTON_LE
   - `test_game_over_text_and_restart_signal`.
 - `test/integration/test_main.gd`:
   - `test_boot_layout_and_initial_state`.
+  - `test_default_board_stays_in_its_draw_call_budget`: with a renderer, Main's own draw calls (Main
+    shown minus Main hidden, which leaves out GUT's window) stay under 150. Pending in headless runs (I.1).
   - `test_no_path_disables_start_with_reason`.
-  - `test_space_starts_wave_and_locks_editor`: a board press is refused and the graph is unchanged.
+  - `test_space_starts_wave_and_locks_editor`: a board press is refused and the graph is unchanged. After
+    a restart with a fixed seed, the arena's `state_hash()` equals that of a fresh
+    `ArenaWorld.begin_wave(1, active_plan, run.wave_seed(), player_hp)`.
+  - `test_x_deletes_hovered_and_escape_cancels`: X removes the hovered Fire and refunds it; Escape cancels
+    a wire drag.
+  - `test_leaving_the_board_drops_the_hover` (real mouse): moving off the board clears the hover, so X
+    then removes nothing.
   - `test_full_loop_build_play_reward_build`:
-    - place via the board signal;
-    - start;
+    - splice a Fire via the board signal;
+    - set `run.player_hp = 60`, so the heal is not capped, and start with the Start button (Space has its
+      own test);
     - drive the controller, never `Bot.play`: call `main.arena.set_physics_process(false)`, then loop
       `main.arena.intent_override = Bot.intent(main.arena.world)` and `main.arena.step(SimTuning.STEP)`
-      while `main.run.flow.state == GameFlow.State.PLAY`, for at most 5400 steps (90 s);
-    - check REWARD with 3 offers including a Splitter;
+      while `main.run.flow.state == GameFlow.State.PLAY`, for at most 5400 steps (90 s); some enemy must
+      burn, which proves the compiled plan reached the arena;
+    - check REWARD with 3 offers including a Splitter, `run.player_hp` equal to the arena's `hp_left`, the
+      lock texts, and an idle arena with no bullets and no FX;
     - key `1` picks;
-    - check BUILD wave 2, the inventory updated and HP healed.
+    - check BUILD wave 2, the inventory updated and HP healed;
+    - play wave 2 idle until GAME_OVER: "Survived 1 wave · 6 kills".
   - `test_death_then_restart`: the same loop with `intent_override` fixed to
     `PlayerIntent.make(Vector2.ZERO, Vector2.ZERO, false)`, at most 3600 steps, until GAME_OVER; the
     overlay is visible; `R` restarts into BUILD wave 1 with the default factory.
+  - `test_real_mouse_builds_and_wires_a_burning_gun`: through the full Main, real palette drags (one a
+    splice), two wire drags, a machine move whose belts follow, and a right-click remove that refunds and
+    heals.
 
 ---
 
@@ -2478,7 +2671,8 @@ Notes on this step:
 
 - GitHub's default `run` shell is `bash -e` **without** pipefail, so the step sets it.
 - The boot log goes to `$RUNNER_TEMP`, so the step never dirties the tree it checks.
-- The stub main boots in about 2.3 s with a clean log (verified).
+- The stub main booted in about 2.3 s with a clean log. The shipped Main boots in about 2.7 s, and its
+  log holds only the engine banner (measured).
 
 ### J.3 What catches what
 
@@ -2492,17 +2686,28 @@ Notes on this step:
 | Uncommitted `.uid` files, or anything import or tests write into the repo | the appended step (clean tree) |
 | A broken Main wiring, a missing class, or a leak at exit of objects created while booting Main idle in BUILD (`WARNING: ObjectDB instances leaked`, `ERROR: N resources still in use`) | the appended step (boot smoke) |
 | A reference cycle in `RunState` (restart path) or in `ArenaWorld` entities (play path) | the weakref asserts in `test_restart_resets_same_instances` and `test_determinism_…` (I.6). Leaks on other paths print only after GUT exits 0 and are **not** caught. |
-| The web export breaking | `pages.yml` on master only. WP4 checks the Pages run after its merge (K.5). |
+| Too many draw calls a frame (for example circles where rects would batch) | `test_default_board_stays_in_its_draw_call_budget`, **only with a renderer** (I.1). CI is headless and reports it as pending. |
+| The web export breaking | `pages.yml` on master only. Check its run after the merge (J.4). |
 
-### J.4 PR flow (CLAUDE.md)
+### J.4 How v1 shipped (CLAUDE.md)
 
-1. Every WP is its own branch from the latest `origin/master`.
-2. Before pushing, run `godot --headless --import`, the GUT command and the boot smoke locally (each
-   under `timeout`).
-3. Open a PR into `master` with auto-merge enabled. It merges when `ci` passes.
-4. **Before relying on auto-merge, the orchestrator must confirm that `ci` is a required status check
-   on `master`.** The reviews disagreed on whether a ruleset exists. Without one, auto-merge merges
-   immediately.
+v1 shipped as one PR. WP1, WP2 and WP3 were built on local branches from the WP0 commit, then merged into
+one integration branch (`claude/project-thread-bh1nem`). WP4 and three review-fix rounds followed on that
+branch, and this file was synced last. That branch goes into `master` as a single PR with auto-merge
+enabled, so it merges when `ci` passes.
+
+- Before pushing, run `godot --headless --import`, the GUT command and the boot smoke (J.2) in a fresh
+  clone, each under `timeout`, so nothing depends on local untracked files.
+- **Before relying on auto-merge, confirm that `ci` is a required status check on `master`.** Without
+  one, auto-merge merges immediately.
+- After the merge, check that the `pages.yml` run on the merge commit succeeded with **both** jobs
+  `success` (not `skipped`):
+  `gh run list -R frostblooded/FactoryGun --workflow pages.yml --commit <full merge sha> --json databaseId,conclusion`
+  and `gh run view <id> -R frostblooded/FactoryGun --json jobs --jq '.jobs[] | {name, conclusion}'`
+  (verified through the agent proxy, which blocks `*.github.io` itself). The build job already runs
+  `test -f build/web/index.wasm`. A failure that shows only in a browser and comes from
+  `export_presets.cfg` (it sets `variant/thread_support=true`, so the page relies on the PWA service
+  worker for cross-origin isolation headers) belongs to that file's owner, not to this project's code.
 
 ---
 
@@ -2514,21 +2719,27 @@ WP0 (infra + kernel) ──► WP1 (rules) ──┐
                      └─► WP3 (editor) ─┘
 ```
 
-**Rules that apply to every WP:**
+v1 shipped as one PR (J.4), not one PR per WP. The WPs below are the order the work was split and built
+in, and they still map who wrote which file (A.2).
 
-- Edit only the files you own (A.2). If you need a change to another WP's file, make it in a separate
-  small PR first.
+**Rules that applied to every WP:**
+
+- Edit only the files you own (A.2).
 - New scripts carry their committed `.uid` files.
 - Every non-trivial function has a test (I.6).
-- The API signatures in B–G are frozen. Private helpers are free.
-- A WP is done when:
-  - its tests and all earlier tests pass locally;
-  - CI `ci` is green;
-  - the PR has merged.
+- The API signatures in B–G are frozen. Private helpers are free. (The additions each WP made are folded
+  into B–G above; no frozen signature changed.)
+- A WP is done when its tests and all earlier tests pass locally, and it is merged into the integration
+  branch.
+
+How it went: WP0 was built on top of `origin/master` (0d8baf0); its last commit is 2511768. WP1, WP2 and
+WP3 branched from 2511768 (0d8baf0 lacks WP0) and were merged into the integration branch as no-ff merges.
+The three touched separate files, so the merges needed no code changes. WP4 and the review-fix rounds were
+then committed on the integration branch.
 
 ### K.1 WP0: infra and kernel (first, alone)
 
-- **Branch:** rebase onto `origin/master` (0d8baf0). That commit brings `export_presets.cfg` and
+- **Branch:** on top of `origin/master` (0d8baf0). That commit brings `export_presets.cfg` and
   `pages.yml`. The old base (830a8e8) lacks both.
 - **Files:** `docs/DESIGN.md` (this file), `project.godot`, `.gitignore`, `.gutconfig.json`,
   `addons/gut/**`, the appended step in `.github/workflows/ci.yml`, `src/main/main.tscn`, the stub
@@ -2574,14 +2785,7 @@ WP0 (infra + kernel) ──► WP1 (rules) ──┐
 - **Consumes:** everything.
 - **README:** what the game is, the controls, how to run it and the tests (the commands in J.1), and a
   link to this file.
-- **Done also means:** the `pages.yml` run on the merge commit succeeded with **both** jobs `success`
-  (not `skipped`). Check it with
-  `gh run list -R frostblooded/FactoryGun --workflow pages.yml --commit <full merge sha> --json databaseId,conclusion`
-  and `gh run view <id> -R frostblooded/FactoryGun --json jobs --jq '.jobs[] | {name, conclusion}'`
-  (verified through the agent proxy, which blocks `*.github.io` itself). The build job already runs
-  `test -f build/web/index.wasm`. A failure that shows only in a browser and comes from
-  `export_presets.cfg` (it sets `variant/thread_support=true`, so the page relies on the PWA service
-  worker for cross-origin isolation headers) goes to the orchestrator. WP4 does not edit that file.
+- The `pages.yml` check after the merge is in J.4. Nobody edits `export_presets.cfg` here.
 
 ### K.6 Interface contracts at a glance
 
@@ -2629,19 +2833,24 @@ WP0 (infra + kernel) ──► WP1 (rules) ──┐
 | 26 | GUT: `-gdir` plus `-gtest` still runs every collected file; `-gtest` alone makes the post-run hook fail on every other file; `-gconfig=` skips `.gutconfig.json` and so the hook. | The one-file command (I.1). |
 | 27 | `godot --headless --path <project> --check-only -s res://x.gd` compiles the real script with the project's warnings-as-errors: exit 1 for untyped or broken code, exit 0 otherwise, including GutTest scripts, the post-run hook, `main.gd` and classes that use their own class and enums. About 0.3–0.6 s per call. | The compile sweep (I.4). |
 | 28 | During a GUI drag, Escape (`ui_cancel`) makes Godot cancel the drag and consume the key; without a drag, Escape reaches `_unhandled_input`. Wheel steps arrive as `InputEventMouseButton` presses (`MOUSE_BUTTON_WHEEL_UP`/`DOWN`). | E.4: no code for Escape in a palette drag; `press()` ignores the wheel. |
+| 29 | Under a real X11 display (Xvfb), a GUI drag-and-drop driven by `Input.parse_input_event` drops where the real X pointer is, not where the events say: every palette drop in the real-mouse tests landed on cell (12, 9), under the pointer at the screen centre (measured). Board gestures handled in `_gui_input` still follow the events. Headless runs follow the events. | The real-mouse tests hold only in headless runs (I.2.8); the renderer-only test is run alone (I.1). |
+| 30 | In the compatibility renderer consecutive `draw_rect` calls batch, while each `draw_circle` is a draw call of its own: Main idle on the default board took about 502 draw calls a frame with circle bolts and rivets, and 73 with squares (measured under Xvfb, opengl3). The headless dummy renderer reports 0 for `Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME`. | Square bolts and rivets (E.2); the draw-call budget test is pending in headless runs (I.1). |
 
 ### L.2 Project risks
 
 | Risk | Mitigation |
 |---|---|
-| Branch protection is unknown, so auto-merge might merge before CI finishes. | The orchestrator confirms `ci` is a required check before enabling auto-merge (J.4). |
+| Branch protection is unknown, so auto-merge might merge before CI finishes. | Confirm that `ci` is a required check before enabling auto-merge (J.4). |
 | The GUT run hangs: a broken hook, or a bare `await`. | Rules I.2.7 and I.3. Run locally under `timeout 300`. The existing job has no `timeout-minutes` (another workstream's file). |
-| Web export problems. The export is only checked by `pages.yml` after merge. | Use only web-safe APIs in `src/`: no `Thread`, `OS.execute`, file writes, pointer lock or window management; no audio; the built-in font only. (`test/` uses `OS.execute`, but `export_presets.cfg` excludes `test/*`.) Right-click works (the web shell suppresses the context menu). Keys avoid browser shortcuts. WP4 checks the Pages run (K.5). |
+| Web export problems. The export is only checked by `pages.yml` after merge. | Use only web-safe APIs in `src/`: no `Thread`, `OS.execute`, file writes, pointer lock or window management; no audio; the built-in font only. (`test/` uses `OS.execute`, but `export_presets.cfg` excludes `test/*`.) Right-click works (the web shell suppresses the context menu). Keys avoid browser shortcuts. Check the Pages run after the merge (J.4). |
 | Parallel WPs drift from the contracts. | Signatures in B–G are frozen. WP2 and WP3 tests use `Fixtures` instead of WP1 code. WP4 integration tests catch any mismatch. |
 | A `.uid` file is missing from a PR. | The clean-tree step fails with an explicit message. |
 | Readout overflow in extreme builds. | The worst-case row fits at 415 px. At most 2 issue lines, then "… N more", so at most 12 lines: 204 px with `line_spacing` 0, the label's exact height (E.7). |
 | GUT's GUI has keyboard focus during integration tests. | Keys are sent via `main._unhandled_input(event)` (I.2.9). |
 | Space or Enter presses a focused button. | `FOCUS_NONE` on every button (A.4.8). |
+| Draw-call regressions pass CI unnoticed: CI is headless. | `test_default_board_stays_in_its_draw_call_budget` runs with a renderer only (I.1). Run it after changing board drawing. |
+| Known limit: a very crowded gap can still put two unrelated belts on one line. | The track search stops at ±2 lanes and stubs never move (E.3 "Belt tracks", a `shortcut:` comment). Widen the search, or route around machines, if it shows in play. |
+| Known limit: an unwired machine moved onto a belt's line looks spliced in. | Its ports have no couplers, its lamp is grey and the hover text says idle (E.2). |
 
 ### L.3 Deliberately cut from v1 (do not build)
 
