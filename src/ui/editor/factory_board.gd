@@ -2,10 +2,11 @@ class_name FactoryBoard
 extends Control
 ## The factory floor editor (docs/DESIGN.md E.2, E.5). It never mutates the model: every gesture becomes a
 ## *_requested signal, or refused(reason).
-## A frame must stay cheap however big the factory grows, so drawing is split over layers, back to front: the
-## floor; the machines and the belt beds, each redrawn only when what it shows changes, with the flickering Fire
-## flames between them; this board's own _draw every frame (moving chevrons and items, hover, gesture); and the
-## lock overlay, redrawn by set_locked.
+## A frame must stay cheap however big the factory grows, so drawing is split over layers, back to front as in
+## E.2: the floor; the belt beds, redrawn only when what they show changes; the moving chevrons and items of live
+## belts, every frame; the machines with the belt couplers over them, redrawn only when they change; the
+## flickering Fire flames, every frame; this board's own _draw every frame (hover, gesture); and the lock overlay,
+## redrawn by set_locked. Machines cover the belts under them, so what is on top is what hit_test finds first.
 
 signal place_requested(kind: StringName, cell: Vector2i, splice: Wire)   # splice may be null
 signal move_requested(machine_id: int, cell: Vector2i)
@@ -29,9 +30,10 @@ var _scroll: float = 0.0                  # how far live belts have moved, px
 var _icon_time: float = 0.0
 var _drop: DropPreview = null             # the palette drag hovering the board, drawn as a ghost
 var _drop_at: Vector2 = Vector2.ZERO
-var _machine_layer: Control = Control.new()   # machines without their animated icons
+var _belt_layer: Control = Control.new()      # belt beds and the still chevrons of dead belts
+var _flow_layer: Control = Control.new()      # the moving chevrons and items of live belts, every frame
+var _machine_layer: Control = Control.new()   # machines without their animated icons, then the belt couplers
 var _flame_layer: Control = Control.new()     # the Fire flames, every frame
-var _belt_layer: Control = Control.new()      # belt beds, still chevrons and couplers, over the machines
 var _lock_layer: Control = Control.new()
 var _static_look: String = ""             # _look() when the machine and belt layers were last redrawn
 var _belts: Array[Wire] = []              # dead belts first, so live items stay on top where routes overlap
@@ -47,14 +49,15 @@ func _init() -> void:
 	var floor_layer: FloorLayer = FloorLayer.new()
 	floor_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(floor_layer)
-	for layer: Control in [_machine_layer, _flame_layer, _belt_layer, _lock_layer]:
+	for layer: Control in [_belt_layer, _flow_layer, _machine_layer, _flame_layer, _lock_layer]:
 		layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		layer.set_anchors_preset(Control.PRESET_FULL_RECT)
-		layer.show_behind_parent = layer != _lock_layer   # these three go under this board's own drawing
+		layer.show_behind_parent = layer != _lock_layer   # all but the lock go under this board's own drawing
 		add_child(layer)
+	_belt_layer.draw.connect(_draw_belts)
+	_flow_layer.draw.connect(_draw_flow)
 	_machine_layer.draw.connect(_draw_machines)
 	_flame_layer.draw.connect(_draw_flames)
-	_belt_layer.draw.connect(_draw_belts)
 	_lock_layer.draw.connect(_draw_lock)
 	mouse_exited.connect(_on_mouse_exited)
 	_rebuild_belts()
@@ -68,6 +71,7 @@ func _process(delta: float) -> void:
 		_drop = null
 	if _look() != _static_look:
 		_redraw_static()
+	_flow_layer.queue_redraw()
 	_flame_layer.queue_redraw()
 	queue_redraw()
 
@@ -99,13 +103,9 @@ func _drop_data(at: Vector2, data: Variant) -> void:
 	_apply(interaction.drop(drag["kind"], at))
 
 
-## Every frame, over the belt beds: the chevrons and items of live belts, the hover and the gesture.
+## Every frame, over the machines: the hover and the gesture.
 func _draw() -> void:
 	var graph: FactoryGraph = interaction.graph
-	for i: int in range(_first_live, _belts.size()):
-		var lit: bool = _is_lit(_belts[i])
-		BeltPainter.draw_chevrons(self, _routes[i], _scroll, BeltPainter.tint(UiColors.CHEVRON, lit))
-		BeltPainter.draw_items(self, _routes[i], _scroll, _items[i], lit)
 	var hover: BoardHit = interaction.hover
 	if hover.type == BoardHit.Type.MACHINE or (hover.type == BoardHit.Type.PORT and not hover.port.is_output):
 		draw_rect(BoardLayout.machine_rect(graph, hover.machine_id).grow(-1.0), UiColors.ACCENT, false, 2.0)
@@ -224,12 +224,17 @@ func _is_lit(w: Wire) -> bool:
 			or (_drop != null and _drop.splice != null and _drop.splice.same_as(w))
 
 
+## The couplers go over the machines: a coupler marks every wired port, and is all a zero-length belt between
+## touching machines shows. They sit on port anchors, where hit_test finds the port first.
 func _draw_machines() -> void:
 	var graph: FactoryGraph = interaction.graph
 	var dragged: int = _dragged()
 	for id: int in graph.machine_ids():
 		MachinePainter.draw_machine(_machine_layer, graph.kind_of(id), BoardLayout.machine_rect(graph, id), id,
 				_plan.status_of(id), 0.35 if id == dragged else 1.0, 0.0, true)
+	for i: int in _belts.size():
+		BeltPainter.draw_coupler(_machine_layer, _routes[i][0], i >= _first_live)
+		BeltPainter.draw_coupler(_machine_layer, _routes[i][_routes[i].size() - 1], i >= _first_live)
 
 
 func _draw_flames() -> void:
@@ -241,18 +246,20 @@ func _draw_flames() -> void:
 					0.35 if id == dragged else 1.0, _icon_time)
 
 
-## Belts go over the machines: a belt across a machine it is not wired to shows across its face instead of
-## seeming to run in and out of its ports. A coupler marks every wired port, and is all a zero-length belt
-## between touching machines shows.
+## Under the machines (E.2): a belt crossing a machine runs beneath it, where hit_test finds the machine.
 func _draw_belts() -> void:
 	for i: int in _belts.size():
 		var lit: bool = _is_lit(_belts[i])
 		BeltPainter.draw_bed(_belt_layer, _routes[i], lit)
 		if i < _first_live:
 			BeltPainter.draw_chevrons(_belt_layer, _routes[i], 0.0, BeltPainter.tint(UiColors.CHEVRON_DIM, lit))
-	for i: int in _belts.size():
-		BeltPainter.draw_coupler(_belt_layer, _routes[i][0], i >= _first_live)
-		BeltPainter.draw_coupler(_belt_layer, _routes[i][_routes[i].size() - 1], i >= _first_live)
+
+
+func _draw_flow() -> void:
+	for i: int in range(_first_live, _belts.size()):
+		var lit: bool = _is_lit(_belts[i])
+		BeltPainter.draw_chevrons(_flow_layer, _routes[i], _scroll, BeltPainter.tint(UiColors.CHEVRON, lit))
+		BeltPainter.draw_items(_flow_layer, _routes[i], _scroll, _items[i], lit)
 
 
 func _draw_gesture() -> void:

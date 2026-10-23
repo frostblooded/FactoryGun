@@ -62,7 +62,8 @@ func test_hit_test_priority() -> void:
 	assert_eq(BoardLayout.hit_test(g, Vector2(160, 80)).type, BoardHit.Type.MACHINE)
 	assert_eq(BoardLayout.hit_test(g, Vector2(132, 80)).type, BoardHit.Type.PORT)
 	assert_eq(BoardLayout.hit_test(g, Vector2(133, 80)).type, BoardHit.Type.MACHINE)
-	# a machine beats a belt running under it
+	# a machine beats a belt running under it: the board draws machines over belts (E.2), so a click goes to what
+	# the player sees
 	var d: FactoryGraph = FactoryGraph.create_default()
 	assert_eq(d.add_machine(MachineCatalog.FIRE, Vector2i(5, 5)), 3)   # on top of the belt 1:0>2:0 at y 240
 	assert_true(BoardLayout.hit_test(d, Vector2(240, 240)).same_as(BoardHit.make(BoardHit.Type.MACHINE, 3)))
@@ -70,6 +71,14 @@ func test_hit_test_priority() -> void:
 	assert_eq(belt.type, BoardHit.Type.BELT)
 	assert_eq(belt.wire.key(), "1:0>2:0")
 	assert_eq(belt.machine_id, -1)
+	# a column-12 Splitter's port 0 belt goes back under its own right edge, past port 1, which is drawn over it;
+	# below the Splitter the belt shows, and is the belt
+	var e: FactoryGraph = FactoryGraph.create_default()
+	assert_eq(e.add_machine(MachineCatalog.SPLITTER, Vector2i(12, 2)), 3)
+	assert_eq(e.add_machine(MachineCatalog.ICE, Vector2i(4, 2)), 4)
+	assert_eq(e.connect_ports(3, 0, 4, 0), GraphError.Code.OK)
+	assert_true(BoardLayout.hit_test(e, Vector2(554, 140)).port.equals(PortRef.make(3, 1, true)))
+	assert_eq(BoardLayout.hit_test(e, Vector2(554, 168)).wire.key(), "3:0>4:0")
 	# overlapping belts: the first in canonical order wins
 	var s: FactoryGraph = Fixtures.split([], [])   # 3:0>2:0 and 3:1>2:0 share y 240 from x 324 to the Output
 	assert_eq(BoardLayout.hit_test(s, Vector2(380, 240)).wire.key(), "3:0>2:0")

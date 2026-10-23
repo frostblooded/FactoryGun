@@ -171,6 +171,7 @@ func test_effects_and_banner_expire() -> void:
 			SimEvent.make(SimEvent.Type.KILL, Vector2(700, 450), Color.PURPLE, 6),
 			SimEvent.make(SimEvent.Type.PLAYER_HIT, Vector2(500, 450), Color.RED, 7)])
 	assert_eq(view._fx.size(), 3)
+	assert_true(view._hit_flash.has(5), "the enemy hit flashes white")
 	view._process(0.1)                        # the muzzle flash and the white hit flash are over
 	assert_eq(view._fx.size(), 2)
 	assert_true(view._hit_flash.is_empty())
@@ -183,6 +184,29 @@ func test_effects_and_banner_expire() -> void:
 	assert_almost_eq(arena.hud.banner_left, 0.5, 1e-4)
 	arena.hud._process(1.0)
 	assert_eq(arena.hud.banner_left, 0.0)
+
+
+## Nothing else asks these views to redraw: the arena repaints itself every frame, and the HUD on every new stat.
+func test_arena_and_hud_repaint() -> void:
+	var arena: ArenaController = _arena()
+	await wait_process_frames(2)
+	watch_signals(arena.view)
+	watch_signals(arena.hud)
+	arena.start_wave(1, Fixtures.plan_of([BulletSpec.new()]), 7, 100.0)
+	await wait_process_frames(3)
+	assert_gte(get_signal_emit_count(arena.view, "draw"), 2, "the arena is drawn every frame")
+	arena.hud._process(Hud.BANNER_TIME)       # the banner is over, so it no longer redraws the HUD
+	await wait_process_frames(2)
+	var hud_draws: int = get_signal_emit_count(arena.hud, "draw")
+	await wait_process_frames(2)
+	assert_signal_emit_count(arena.hud, "draw", hud_draws, "nothing new to show")
+	arena.world.cancel_spawns()
+	arena.world.spawn_enemy(EnemyType.Kind.GRUNT, Vector2(520, 450))   # touching the player
+	arena.intent_override = PlayerIntent.make(Vector2.ZERO, Vector2.ZERO, false)
+	arena.step(STEP)
+	assert_lt(arena.hud.hp, 100.0)
+	await wait_process_frames(2)
+	assert_signal_emit_count(arena.hud, "draw", hud_draws + 1, "the new HP is drawn")
 
 
 func _arena() -> ArenaController:

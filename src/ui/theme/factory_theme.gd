@@ -21,6 +21,9 @@ static func build() -> Theme:
 	t.set_color("font_color", "Label", UiColors.TEXT)
 	t.set_stylebox("panel", "Panel", _box(UiColors.PANEL_BG, UiColors.PANEL_EDGE))
 	t.set_stylebox("panel", "PanelContainer", _box(UiColors.PANEL_BG, UiColors.PANEL_EDGE))
+	# Godot's default tooltip panel is 50% black: the palette's names and counts showed through its text.
+	t.set_stylebox("panel", "TooltipPanel", _box(UiColors.PANEL_BG, UiColors.PANEL_EDGE))
+	t.set_color("font_color", "TooltipLabel", UiColors.TEXT)
 	return t
 
 

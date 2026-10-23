@@ -44,6 +44,10 @@ func test_render_smoke_all_statuses() -> void:
 	assert_eq(pressed.border_color, UiColors.ACCENT)
 	assert_eq(pressed.get_border_width(SIDE_LEFT), 2)
 	assert_eq(panel.theme.get_color("font_disabled_color", "Button"), UiColors.TEXT_DIM)
+	var tip: StyleBoxFlat = panel.theme.get_stylebox("panel", "TooltipPanel")   # opaque: the palette never shows through
+	assert_eq([tip.bg_color, tip.border_color], [UiColors.PANEL_BG, UiColors.PANEL_EDGE])
+	assert_eq(tip.bg_color.a, 1.0)
+	assert_eq(panel.theme.get_color("font_color", "TooltipLabel"), UiColors.TEXT)
 	panel.set_plan(plan)
 	panel.set_start_state(4, true, "")
 	assert_eq(panel.readout.label.text, "\n".join(plan.summary_lines()))
@@ -242,14 +246,15 @@ func test_board_layers_and_what_redraws() -> void:
 	assert_eq(g.connect_ports(3, 0, FactoryGraph.OUTPUT_ID, 0), GraphError.Code.OK)   # shares the live belt's last leg
 	var panel: FactoryPanel = _panel(g, Fixtures.inventory_all(1))
 	var board: FactoryBoard = panel.board
-	# back to front: the floor, the machines, the flames, the belt beds (all behind the board's own drawing of
-	# what moves), then the lock overlay; so belts cross over machines they are not wired to
-	var behind: Array[Control] = [board._machine_layer, board._flame_layer, board._belt_layer]
+	# back to front as in E.2: the floor, the belt beds, the moving belt parts, the machines (couplers on top), the
+	# flames (all behind the board's own hover and gesture), then the lock overlay. A machine covers the belts
+	# under it, as hit_test assumes: it finds the machine before any belt (test_board_layout).
+	var behind: Array[Control] = [board._belt_layer, board._flow_layer, board._machine_layer, board._flame_layer]
 	assert_true(board.get_child(0) is FloorLayer)
 	for i: int in behind.size():
 		assert_same(board.get_child(i + 1), behind[i])
 		assert_true(behind[i].show_behind_parent)
-	assert_same(board.get_child(4), board._lock_layer)
+	assert_same(board.get_child(5), board._lock_layer)
 	assert_false(board._lock_layer.show_behind_parent)
 	# dead belts are drawn first, so a live belt's items stay on top where their routes overlap
 	var plan: ShotPlan = ShotPlan.new()
@@ -259,13 +264,16 @@ func test_board_layers_and_what_redraws() -> void:
 	assert_eq(_keys(board._belts), ["3:0>2:0", "1:0>2:0"])
 	assert_eq(board._first_live, 1)
 	await wait_process_frames(2)
-	watch_signals(board)
-	watch_signals(board._machine_layer)
-	watch_signals(board._belt_layer)
+	for layer: Control in [board, board._belt_layer, board._flow_layer, board._machine_layer, board._flame_layer,
+			board._lock_layer]:
+		watch_signals(layer)
 	await wait_process_frames(3)
-	assert_gte(get_signal_emit_count(board, "draw"), 2, "what moves is drawn every frame")
+	assert_gte(get_signal_emit_count(board, "draw"), 2, "the hover and the gesture are drawn every frame")
+	assert_gte(get_signal_emit_count(board._flow_layer, "draw"), 2, "live belts move every frame")
+	assert_gte(get_signal_emit_count(board._flame_layer, "draw"), 2, "Fire #3's flame flickers every frame")
 	assert_signal_emit_count(board._machine_layer, "draw", 0, "nothing changed")
 	assert_signal_emit_count(board._belt_layer, "draw", 0, "nothing changed")
+	assert_signal_emit_count(board._lock_layer, "draw", 0, "nothing changed")
 	board.interaction.motion(Vector2(300, 240))           # hover the live belt: it is drawn brightened
 	await wait_process_frames(3)
 	assert_signal_emit_count(board._belt_layer, "draw", 1)
@@ -282,6 +290,13 @@ func test_board_layers_and_what_redraws() -> void:
 	board.interaction.motion(Vector2(320, 120))
 	await wait_process_frames(2)
 	assert_signal_emit_count(board._machine_layer, "draw", 3)
+	# the lock overlay is drawn only when the lock changes
+	panel.set_locked(true, "LOCKED · WAVE 1 IN PROGRESS")
+	await wait_process_frames(2)
+	assert_signal_emit_count(board._lock_layer, "draw", 1)
+	panel.set_locked(false, "")
+	await wait_process_frames(2)
+	assert_signal_emit_count(board._lock_layer, "draw", 2)
 
 
 func test_refusal_box_and_remove_label_stay_clear_and_inside() -> void:
@@ -301,25 +316,31 @@ func test_refusal_box_and_remove_label_stay_clear_and_inside() -> void:
 	assert_eq(board._release_label(BoardLayout.machine_rect_at(Vector2i(12, 10))).end, Vector2(560, 449))
 
 
+## The ghost of a palette drag leaves the board with the cursor, and with a drag that ends without a drop.
 func test_locking_cancels_a_palette_drag() -> void:
 	await Mouse.prepare(self)
 	var panel: FactoryPanel = _panel(FactoryGraph.create_default(), Fixtures.inventory_all(1))
-	watch_signals(panel.board)
+	var board: FactoryBoard = panel.board
+	watch_signals(board)
 	Mouse.move(SLOT_0, SLOT_0, 0)
 	await wait_process_frames(1)
 	Mouse.button(SLOT_0, true)
 	await wait_process_frames(1)
 	var last: Vector2 = SLOT_0
-	for p: Vector2 in [SLOT_0 + Vector2(0, -60), SLOT_0 + Vector2(0, -120)]:   # up onto the board
+	# up onto the board, back over the palette, onto the board again
+	for p: Vector2 in [SLOT_0 + Vector2(0, -60), SLOT_0 + Vector2(0, -120), SLOT_0, SLOT_0 + Vector2(0, -120)]:
 		Mouse.move(p, last, MOUSE_BUTTON_MASK_LEFT)
 		last = p
 		await wait_process_frames(1)
+		assert_eq(board._drop != null, p.y < FactoryPanel.BOARD_POS.y + board.size.y, str(p))
 	assert_true(get_viewport().gui_is_dragging())
 	panel.set_locked(true, "LOCKED · WAVE 1 IN PROGRESS")
 	assert_false(get_viewport().gui_is_dragging())
+	await wait_process_frames(1)
+	assert_null(board._drop, "no ghost once the drag is gone")
 	Mouse.button(last, false)
 	await wait_process_frames(2)
-	assert_signal_not_emitted(panel.board, "place_requested")
+	assert_signal_not_emitted(board, "place_requested")
 
 
 func test_palette_drag_places_on_board() -> void:

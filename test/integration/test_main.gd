@@ -126,6 +126,26 @@ func test_x_deletes_hovered_and_escape_cancels() -> void:
 	assert_eq(run.graph.to_dict()["wires"], ["1:0>2:0"])            # the cancelled drag connected nothing
 	await wait_process_frames(2)
 
+
+## The board gets no motion once the mouse has left it, so leaving must drop the hover (E.5): X over the arena
+## must not remove the machine the mouse was last over.
+func test_leaving_the_board_drops_the_hover() -> void:
+	await Mouse.prepare(self)
+	var main: Main = _main()
+	var run: RunState = main.run
+	var board: FactoryBoard = main.panel.board
+	board.place_requested.emit(MachineCatalog.FIRE, Vector2i(5, 1), null)
+	Mouse.move(BOARD + Vector2(240, 80), BOARD + Vector2(240, 80), 0)   # onto Fire #3
+	await wait_process_frames(1)
+	assert_true(board.interaction.hover.same_as(BoardHit.make(BoardHit.Type.MACHINE, 3)))
+	Mouse.move(Vector2(700, 450), BOARD + Vector2(240, 80), 0)          # over the arena in one motion
+	await wait_process_frames(1)
+	assert_eq(board.interaction.hover.type, BoardHit.Type.EMPTY)
+	_key(main, KEY_X)
+	assert_true(run.graph.has_machine(3))
+	await wait_process_frames(2)
+
+
 func test_full_loop_build_play_reward_build() -> void:
 	var main: Main = _main()
 	var run: RunState = main.run
