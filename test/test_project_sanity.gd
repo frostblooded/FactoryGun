@@ -30,11 +30,11 @@ func test_core_and_sim_are_pure() -> void:
 
 func test_input_actions_are_registered() -> void:
 	InputSetup.ensure_actions()
-	var events_before: int = InputMap.action_get_events(InputSetup.FIRE).size()
+	var events_before: int = InputMap.action_get_events(InputSetup.START_WAVE).size()
 	InputSetup.ensure_actions()               # idempotent
-	assert_eq(InputMap.action_get_events(InputSetup.FIRE).size(), events_before)
+	assert_eq(InputMap.action_get_events(InputSetup.START_WAVE).size(), events_before)
 	for a: StringName in [InputSetup.MOVE_LEFT, InputSetup.MOVE_RIGHT, InputSetup.MOVE_UP, InputSetup.MOVE_DOWN,
-			InputSetup.FIRE, InputSetup.START_WAVE, InputSetup.DELETE_HOVERED, InputSetup.CANCEL,
+			InputSetup.START_WAVE, InputSetup.DELETE_HOVERED, InputSetup.CANCEL,
 			InputSetup.RESTART] + InputSetup.PICK:
 		assert_true(InputMap.has_action(a) and not InputMap.action_get_events(a).is_empty(), String(a))
 

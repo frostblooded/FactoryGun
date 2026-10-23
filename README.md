@@ -20,15 +20,17 @@ then build again. If you die, the run is over: restart and try a different facto
 |---|---|
 | Place a machine | Drag it from the palette onto the floor. Drop it on a belt to splice it in. |
 | Move a machine | Drag it to another spot. Its belts follow. |
-| Remove a machine (refund) | Drag it off the floor, right-click it, or hover it and press Delete or X. |
+| Remove a machine (refund) | Drag it onto the REMOVE bin (or anywhere off the floor), right-click it, or hover it and press Delete or X. |
 | Connect a belt | Drag from an output port (right edge) to an input port (left edge). Dragging from an output port that already has a belt re-routes it. |
-| Cut a belt | Right-click it (or its output port), or hover it and press Delete or X. |
+| Cut a belt | Tap or click it (or its output port), then press CUT. Or right-click it, or hover it and press Delete or X. |
 | Cancel a gesture | Escape, or right-click while dragging. |
 | Start the wave | Space, Enter, or the START WAVE button. |
-| Move | W A S D or the arrow keys. |
-| Aim and fire | Mouse to aim, hold the left button to fire. |
-| Pick a reward | 1, 2 or 3, or click a card. |
+| Move | W A S D or the arrow keys. On a touch screen, put a finger anywhere in the arena and drag: a stick appears under it. |
+| Aim and fire | Automatic: the gun aims at the nearest enemy and fires on its own. |
+| Pick a reward | 1, 2 or 3, or click or tap a card. |
 | Restart after game over | R, or the RESTART button. |
+
+On a phone, play in landscape: holding it upright pauses the game behind a "rotate your phone" notice.
 
 The factory is locked while a wave is running. The readout under the palette shows what one trigger
 pull fires.

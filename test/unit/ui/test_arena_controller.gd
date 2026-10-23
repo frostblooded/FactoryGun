@@ -15,7 +15,8 @@ func test_start_wave_runs_and_updates_hud() -> void:
 	assert_eq(arena.mouse_filter, Control.MOUSE_FILTER_PASS)
 	assert_eq(arena.view.mouse_filter, Control.MOUSE_FILTER_IGNORE)
 	assert_eq(arena.hud.mouse_filter, Control.MOUSE_FILTER_IGNORE)
-	assert_eq(arena.mouse_default_cursor_shape, Control.CURSOR_CROSS)
+	assert_eq(arena.stick.mouse_filter, Control.MOUSE_FILTER_IGNORE)
+	assert_eq(arena.mouse_default_cursor_shape, Control.CURSOR_ARROW, "nothing to aim: the gun aims itself")
 	assert_true(arena.clip_contents)
 	arena.start_wave(3, Fixtures.plan_of([BulletSpec.new()]), 42, 80.0)
 	assert_true(arena.is_running())
@@ -141,25 +142,59 @@ func test_physics_tick_reads_real_input() -> void:
 	var arena: ArenaController = _arena()
 	arena.position = Vector2(100, 0)          # local != global, as in the game
 	arena.start_wave(1, Fixtures.plan_of([BulletSpec.new()]), 7, 100.0)
-	Mouse.move(Vector2(900, 450), Vector2(900, 450), 0)     # arena-local (800, 450): right of the player
+	arena.world.cancel_spawns()
 	var w: InputEventKey = InputEventKey.new()
 	w.physical_keycode = KEY_W
 	w.pressed = true
-	Input.parse_input_event(w)
-	Mouse.button(Vector2(900, 450), true)                 # real events, so the InputSetup bindings are covered
+	Input.parse_input_event(w)                # real events, so the InputSetup bindings are covered
 	await wait_process_frames(1)
 	arena._physics_process(STEP)
 	assert_lt(arena.world.player.pos.y, 450.0, "W moves up")
-	assert_almost_eq(arena.world.player.aim_dir.x, 1.0, 0.01, "aim follows the local mouse")
-	assert_eq(arena.world.bullets.size(), 1, "fire held over the arena shoots")
-	Mouse.move(Vector2(50, 450), Vector2(900, 450), MOUSE_BUTTON_MASK_LEFT)   # over the editor
-	await wait_process_frames(1)
-	for i: int in 30:
-		arena._physics_process(STEP)
-	assert_eq(arena.world.bullets.size(), 1, "no shots while the mouse is over the editor")
-	Mouse.button(Vector2(50, 450), false)
+	assert_eq(arena.world.bullets.size(), 0, "no enemy: no shot")
+	arena.world.spawn_enemy(EnemyType.Kind.GRUNT, Vector2(500, 0))     # above the player, farther
+	arena.world.spawn_enemy(EnemyType.Kind.GRUNT, Vector2(900, 450))   # nearer: right of the player
+	arena._physics_process(STEP)
+	assert_almost_eq(arena.world.player.aim_dir.x, 1.0, 0.01, "aims at the nearest enemy")
+	assert_eq(arena.world.bullets.size(), 1, "and fires on its own")
 	w.pressed = false
 	Input.parse_input_event(w)
+	await wait_process_frames(1)
+
+
+func test_touch_stick_moves_the_player() -> void:
+	await Mouse.prepare(self)
+	var arena: ArenaController = _arena()
+	arena.position = Vector2(600, 0)
+	_touch(0, Vector2(800, 600), true)
+	await wait_process_frames(1)
+	assert_false(arena.stick.is_active(), "no stick between waves")
+	_touch(0, Vector2(800, 600), false)
+	arena.start_wave(1, Fixtures.plan_of([BulletSpec.new()]), 7, 100.0)
+	arena.world.cancel_spawns()
+	_touch(0, Vector2(300, 600), true)        # over the editor
+	await wait_process_frames(1)
+	assert_false(arena.stick.is_active(), "a touch on the editor is not the stick")
+	_touch(0, Vector2(300, 600), false)
+	_touch(1, Vector2(800, 600), true)
+	await wait_process_frames(1)
+	assert_true(arena.stick.is_active())
+	assert_eq(arena.stick.origin, Vector2(200, 600), "arena-local")
+	_drag(2, Vector2(1000, 600))              # another finger does not steer it
+	_drag(1, Vector2(800 + TouchStick.RADIUS * 3, 600))
+	await wait_process_frames(1)
+	assert_eq(arena.stick.vector(), Vector2.RIGHT, "clamped to full speed")
+	var x: float = arena.world.player.pos.x
+	arena._physics_process(STEP)
+	assert_almost_eq(arena.world.player.pos.x - x, SimTuning.PLAYER_SPEED * STEP, 1e-3)
+	_touch(1, Vector2(1000, 600), false)
+	await wait_process_frames(1)
+	assert_false(arena.stick.is_active())
+	assert_eq(arena.stick.vector(), Vector2.ZERO)
+	_touch(3, Vector2(800, 600), true)
+	await wait_process_frames(1)
+	arena.go_idle(100.0, 2)
+	assert_false(arena.stick.is_active(), "going idle drops the stick")
+	_touch(3, Vector2(800, 600), false)
 	await wait_process_frames(1)
 
 
@@ -207,6 +242,21 @@ func test_arena_and_hud_repaint() -> void:
 	assert_lt(arena.hud.hp, 100.0)
 	await wait_process_frames(2)
 	assert_signal_emit_count(arena.hud, "draw", hud_draws + 1, "the new HP is drawn")
+
+
+func _touch(index: int, pos: Vector2, pressed: bool) -> void:
+	var e: InputEventScreenTouch = InputEventScreenTouch.new()
+	e.index = index
+	e.position = pos
+	e.pressed = pressed
+	Input.parse_input_event(e)
+
+
+func _drag(index: int, pos: Vector2) -> void:
+	var e: InputEventScreenDrag = InputEventScreenDrag.new()
+	e.index = index
+	e.position = pos
+	Input.parse_input_event(e)
 
 
 func _arena() -> ArenaController:

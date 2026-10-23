@@ -8,18 +8,19 @@ signal player_died(kills: int)
 var world: ArenaWorld = ArenaWorld.new()
 var view: ArenaView                       # child, mouse IGNORE, view.world = world
 var hud: Hud                              # child, mouse IGNORE
+var stick: TouchStick                     # child, mouse IGNORE, over the HUD
 var intent_override: PlayerIntent = null  # tests set this instead of real input
 
 
 func _init() -> void:
 	clip_contents = true
 	mouse_filter = MOUSE_FILTER_PASS
-	mouse_default_cursor_shape = CURSOR_CROSS
 	view = ArenaView.new()
 	view.world = world
 	hud = Hud.new()
+	stick = TouchStick.new()
 	# Full-rect children follow this control's size; setting their size would warn (A.4.5).
-	for child: Control in [view, hud]:
+	for child: Control in [view, hud, stick]:
 		child.mouse_filter = MOUSE_FILTER_IGNORE
 		child.set_anchors_preset(PRESET_FULL_RECT)
 		add_child(child)
@@ -29,8 +30,23 @@ func _physics_process(delta: float) -> void:
 	step(delta)
 
 
+## Touches, not emulated mouse events, drive the stick, so a second finger cannot steal it. A finger lands on it
+## only during a wave, so tapping a reward card or Restart never shows it.
+func _input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch:
+		var touch: InputEventScreenTouch = make_input_local(event)
+		if not touch.pressed:
+			stick.release(touch.index)
+		elif world.is_running() and Rect2(Vector2.ZERO, size).has_point(touch.position):
+			stick.press(touch.index, touch.position)
+	elif event is InputEventScreenDrag:
+		var touch_drag: InputEventScreenDrag = make_input_local(event)
+		stick.drag(touch_drag.index, touch_drag.position)
+
+
 func start_wave(wave: int, plan: ShotPlan, wave_seed: int, hp: float) -> void:
 	world.begin_wave(wave, plan, wave_seed, hp)
+	stick.reset()
 	view.clear_fx()
 	hud.set_wave(wave, true)
 	hud.set_stats(hp, world.enemies_remaining())
@@ -39,6 +55,7 @@ func start_wave(wave: int, plan: ShotPlan, wave_seed: int, hp: float) -> void:
 
 func go_idle(hp: float, next_wave: int) -> void:
 	world.reset_idle(hp)
+	stick.reset()
 	view.clear_fx()
 	hud.set_wave(next_wave, false)
 	hud.set_stats(hp, 0)
@@ -61,9 +78,11 @@ func step(delta: float) -> void:
 			wave_cleared.emit(world.player.hp, world.kills)
 
 
+## The gun aims at the nearest enemy and fires whenever there is one; the player only moves (F.8).
 func _read_intent() -> PlayerIntent:
-	var aim: Vector2 = get_local_mouse_position()
-	# Fire only over the arena, so clicking the locked editor never shoots.
-	var fire: bool = Input.is_action_pressed(InputSetup.FIRE) and Rect2(Vector2.ZERO, size).has_point(aim)
-	return PlayerIntent.make(Input.get_vector(InputSetup.MOVE_LEFT, InputSetup.MOVE_RIGHT,
-			InputSetup.MOVE_UP, InputSetup.MOVE_DOWN), aim, fire)
+	var move: Vector2 = Input.get_vector(InputSetup.MOVE_LEFT, InputSetup.MOVE_RIGHT, InputSetup.MOVE_UP,
+			InputSetup.MOVE_DOWN) + stick.vector()
+	var target: EnemyState = world.nearest_enemy()
+	if target == null:
+		return PlayerIntent.make(move, world.player.pos + world.player.aim_dir, false)
+	return PlayerIntent.make(move, target.pos, true)

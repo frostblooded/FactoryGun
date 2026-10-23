@@ -16,6 +16,8 @@ var drag_grab: Vector2 = Vector2.ZERO     # cursor minus the dragged machine's t
 var wire_from: PortRef = null
 var wire_target: PortRef = null           # magnet-snapped input port, or null
 var wire_code: GraphError.Code = GraphError.Code.OK
+var selected: Wire = null                 # the tapped belt the Cut button cuts, or null
+var selected_at: Vector2 = Vector2.ZERO   # where it was tapped
 var _press_at: Vector2 = Vector2.ZERO
 
 
@@ -34,6 +36,7 @@ func set_locked(value: bool) -> void:
 
 func cancel() -> void:
 	_end_gesture()
+	selected = null
 	refresh_hover()
 
 
@@ -50,7 +53,11 @@ func press(p: Vector2, button: MouseButton) -> BoardAction:
 	if button == MOUSE_BUTTON_RIGHT:
 		return secondary(hit)
 	_end_gesture()
-	if hit.type == BoardHit.Type.PORT and hit.port.is_output:
+	selected = null                       # any left press drops the selection; a belt tap makes a new one
+	_press_at = p
+	if hit.type == BoardHit.Type.BELT:
+		_select(hit.wire, p)
+	elif hit.type == BoardHit.Type.PORT and hit.port.is_output:
 		mode = Mode.DRAG_WIRE
 		wire_from = hit.port
 		_aim_wire()
@@ -58,7 +65,6 @@ func press(p: Vector2, button: MouseButton) -> BoardAction:
 		mode = Mode.PRESS_MACHINE
 		drag_id = hit.machine_id
 		drag_grab = p - BoardLayout.machine_rect(graph, drag_id).position
-		_press_at = p
 	return BoardAction.none()
 
 
@@ -85,6 +91,9 @@ func release(p: Vector2) -> BoardAction:
 		action = BoardAction.make_remove(drag_id) if is_drag_outside() else BoardAction.make_move(drag_id, ghost_cell())
 	elif refusal == "" and mode == Mode.DRAG_WIRE and wire_target != null:
 		action = BoardAction.make_connect(wire_from, wire_target)
+	elif mode == Mode.DRAG_WIRE and p.distance_to(_press_at) <= BoardLayout.DRAG_THRESHOLD:
+		# A tap on an output port selects its belt: the only target of a zero-length belt (E.3).
+		_select(graph.wire_from(wire_from.machine_id, wire_from.port), p)
 	_end_gesture()
 	return action
 
@@ -94,6 +103,23 @@ func refresh_hover() -> void:
 		hover = BoardLayout.hit_test(graph, cursor)
 	else:
 		hover = BoardHit.new()
+
+
+## The Cut button: DISCONNECT the selected belt, which stays selected only if the cut is refused.
+func cut_selected() -> BoardAction:
+	if selected == null:
+		return BoardAction.none()
+	if locked:
+		return BoardAction.none(GraphError.describe(GraphError.Code.LOCKED))
+	var action: BoardAction = BoardAction.make_disconnect(selected)
+	selected = null
+	return action
+
+
+## After a graph change: forget a selected belt that no longer exists.
+func drop_stale_selection() -> void:
+	if selected != null and not graph.has_wire(selected):
+		selected = null
 
 
 ## Right-click and Delete/X semantics: cut a belt, or remove a machine (refunded by RunState).
@@ -169,6 +195,12 @@ func _end_gesture() -> void:
 	wire_from = null
 	wire_target = null
 	wire_code = GraphError.Code.OK
+
+
+## w may be null (an output port with no belt).
+func _select(w: Wire, p: Vector2) -> void:
+	selected = w
+	selected_at = p
 
 
 func _aim_wire() -> void:

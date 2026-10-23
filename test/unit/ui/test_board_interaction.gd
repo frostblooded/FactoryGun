@@ -209,6 +209,47 @@ func test_wire_drag_without_target_is_silent() -> void:
 	assert_eq(g.to_dict(), before)
 
 
+func test_tap_selects_a_belt_and_cut_disconnects_it() -> void:
+	var g: FactoryGraph = Fixtures.chain([MachineCatalog.FIRE])
+	var ia: BoardInteraction = _bound(g)
+	assert_eq(ia.cut_selected().type, BoardAction.Type.NONE, "nothing selected")
+	ia.press(ON_BELT_3_2, MOUSE_BUTTON_LEFT)
+	assert_eq(ia.release(ON_BELT_3_2).type, BoardAction.Type.NONE)
+	assert_true(ia.selected.same_as(g.wire_from(3, 0)))
+	assert_eq(ia.selected_at, ON_BELT_3_2)
+	ia.press(Vector2(500, 400), MOUSE_BUTTON_LEFT)       # any other press drops it
+	assert_null(ia.selected)
+	ia.press(FIRE_OUTPUT, MOUSE_BUTTON_LEFT)              # a tap on an output port picks its belt
+	ia.motion(FIRE_OUTPUT + Vector2(3, 3))
+	ia.release(FIRE_OUTPUT + Vector2(3, 3))
+	assert_true(ia.selected.same_as(g.wire_from(3, 0)))
+	var cut: BoardAction = ia.cut_selected()
+	assert_eq(cut.type, BoardAction.Type.DISCONNECT)
+	assert_true(cut.wire.same_as(g.wire_from(3, 0)))
+	assert_null(ia.selected)
+	ia.press(FIRE_OUTPUT, MOUSE_BUTTON_LEFT)              # a wire drag that goes nowhere selects nothing
+	ia.motion(Vector2(300, 400))
+	ia.release(Vector2(300, 400))
+	assert_null(ia.selected)
+	ia.press(ON_BELT_3_2, MOUSE_BUTTON_LEFT)
+	ia.release(ON_BELT_3_2)
+	ia.cancel()
+	assert_null(ia.selected, "cancel drops it")
+	ia.press(ON_BELT_3_2, MOUSE_BUTTON_LEFT)
+	ia.release(ON_BELT_3_2)
+	ia.locked = true                                      # set_locked(true) would cancel; a stale pick still refuses
+	assert_eq(ia.cut_selected().refusal, _locked_text)
+	assert_not_null(ia.selected)
+	ia.set_locked(true)
+	assert_null(ia.selected)
+	ia.set_locked(false)
+	ia.press(ON_BELT_3_2, MOUSE_BUTTON_LEFT)
+	ia.release(ON_BELT_3_2)
+	assert_eq(g.disconnect_wire(g.wire_from(3, 0)), GraphError.Code.OK)
+	ia.drop_stale_selection()
+	assert_null(ia.selected, "a belt that is gone is forgotten")
+
+
 func test_secondary_actions() -> void:
 	var g: FactoryGraph = Fixtures.chain([MachineCatalog.FIRE])
 	var ia: BoardInteraction = _bound(g)

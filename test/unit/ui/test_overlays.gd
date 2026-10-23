@@ -79,6 +79,19 @@ func test_game_over_text_and_restart_signal() -> void:
 	assert_signal_emit_count(overlay, "restart_requested", 1)
 
 
+func test_rotate_hint_only_on_upright_touch_screens() -> void:
+	assert_true(RotateHint.should_show(Vector2i(390, 844), true))
+	assert_false(RotateHint.should_show(Vector2i(844, 390), true))
+	assert_false(RotateHint.should_show(Vector2i(390, 844), false), "a narrow desktop window is letterboxed")
+	var hint: RotateHint = RotateHint.new()
+	add_child_autofree(hint)
+	hint.size = Vector2(1600, 900)
+	await wait_process_frames(2)
+	assert_false(hint.visible, "headless has no touch screen")
+	assert_false(get_tree().paused)
+	assert_eq(hint.process_mode, Node.PROCESS_MODE_ALWAYS)
+
+
 func _reward_overlay() -> RewardOverlay:
 	var overlay: RewardOverlay = RewardOverlay.new()
 	add_child_autofree(overlay)

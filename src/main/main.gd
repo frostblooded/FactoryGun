@@ -6,12 +6,14 @@ extends Control
 
 const PANEL_RECT: Rect2 = Rect2(0, 0, 600, 900)
 const ARENA_RECT: Rect2 = Rect2(600, 0, 1000, 900)
+const SCREEN_RECT: Rect2 = Rect2(0, 0, 1600, 900)
 
 var run: RunState = RunState.new(randi())   # randi() is allowed outside core/sim
 var panel: FactoryPanel = FactoryPanel.new()
 var arena: ArenaController = ArenaController.new()
 var reward_overlay: RewardOverlay = RewardOverlay.new()
 var game_over_overlay: GameOverOverlay = GameOverOverlay.new()
+var rotate_hint: RotateHint = RotateHint.new()
 
 
 func _ready() -> void:
@@ -21,6 +23,7 @@ func _ready() -> void:
 	_add(arena, ARENA_RECT)
 	_add(reward_overlay, ARENA_RECT)        # overlays after the arena: drawn on top
 	_add(game_over_overlay, ARENA_RECT)
+	_add(rotate_hint, SCREEN_RECT)          # last: over everything
 	panel.bind(run.graph, run.inventory)
 	run.plan_changed.connect(_on_plan_changed)
 	run.flow.state_changed.connect(_on_state_changed)

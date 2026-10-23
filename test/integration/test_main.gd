@@ -15,9 +15,9 @@ const NO_PATH: String = "Connect the Basic Bullet to the Output first."
 func test_boot_layout_and_initial_state() -> void:
 	var main: Main = _main()
 	var run: RunState = main.run
-	assert_eq(main.get_child_count(), 4)
-	var order: Array[Control] = [main.panel, main.arena, main.reward_overlay, main.game_over_overlay]
-	var rects: Array[Rect2] = [Main.PANEL_RECT, Main.ARENA_RECT, Main.ARENA_RECT, Main.ARENA_RECT]
+	assert_eq(main.get_child_count(), 5)
+	var order: Array[Control] = [main.panel, main.arena, main.reward_overlay, main.game_over_overlay, main.rotate_hint]
+	var rects: Array[Rect2] = [Main.PANEL_RECT, Main.ARENA_RECT, Main.ARENA_RECT, Main.ARENA_RECT, Main.SCREEN_RECT]
 	for i: int in order.size():               # the overlays come after the arena, so they draw on top
 		assert_same(main.get_child(i), order[i])
 		assert_eq(Rect2(order[i].position, order[i].size), rects[i])
@@ -38,6 +38,7 @@ func test_boot_layout_and_initial_state() -> void:
 	assert_eq([main.arena.hud.wave, main.arena.hud.running], [1, false])
 	assert_almost_eq(main.arena.hud.hp, Tuning.PLAYER_MAX_HP, 1e-4)
 	assert_false(main.reward_overlay.visible)
+	assert_false(main.rotate_hint.visible, "headless has no touch screen")
 	assert_false(main.game_over_overlay.visible)
 	await wait_process_frames(2)
 	assert_eq(main.arena.view.size, Vector2(1000, 900))   # full-rect children follow the arena's size
