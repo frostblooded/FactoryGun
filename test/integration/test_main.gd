@@ -44,6 +44,22 @@ func test_boot_layout_and_initial_state() -> void:
 	assert_eq(main.arena.hud.size, Vector2(1000, 900))
 
 
+## Each draw_circle is a draw call of its own, where rects batch: the floor's 336 bolts as circles took Main idle on
+## the default board to about 500 draw calls a frame. The dummy renderer of a headless run counts no draw calls, so
+## this checks only in a run with a renderer (for example under xvfb-run, without --headless).
+func test_default_board_stays_in_its_draw_call_budget() -> void:
+	if DisplayServer.get_name() == "headless":
+		pending("headless: the dummy renderer counts no draw calls")
+		return
+	var main: Main = _main()
+	main.visible = false
+	await wait_process_frames(3)
+	var others: float = Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)   # GUT's own window
+	main.visible = true
+	await wait_process_frames(3)
+	assert_lt(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME) - others, 150.0)
+
+
 func test_no_path_disables_start_with_reason() -> void:
 	var main: Main = _main()
 	var run: RunState = main.run
@@ -73,6 +89,7 @@ func test_no_path_disables_start_with_reason() -> void:
 func test_space_starts_wave_and_locks_editor() -> void:
 	var main: Main = _main()
 	var run: RunState = main.run
+	run.restart(SEED)
 	var before: Dictionary = run.graph.to_dict()
 	_key(main, KEY_SPACE)
 	assert_eq(run.flow.state, GameFlow.State.PLAY)
@@ -80,7 +97,12 @@ func test_space_starts_wave_and_locks_editor() -> void:
 	assert_true(main.arena.is_running())
 	assert_same(main.arena.world.plan, run.active_plan)
 	assert_eq(main.arena.world.wave, 1)
+	# seeded with this wave's seed: the same start in a fresh world gives the same state, rng included
+	var fresh: ArenaWorld = ArenaWorld.new()
+	fresh.begin_wave(1, run.active_plan, run.wave_seed(), run.player_hp)
+	assert_eq(main.arena.world.state_hash(), fresh.state_hash())
 	assert_eq([main.arena.hud.wave, main.arena.hud.running, main.arena.hud.banner_text], [1, true, "WAVE 1"])
+	assert_eq(main.panel.board._lock_text, "LOCKED · WAVE 1 IN PROGRESS")
 	assert_true(main.panel.board.interaction.locked)
 	assert_true(main.panel.start_button.disabled)
 	for slot: PaletteSlot in main.panel.slots:
@@ -97,6 +119,7 @@ func test_space_starts_wave_and_locks_editor() -> void:
 	assert_eq(run.inventory.count(MachineCatalog.FIRE), 1)
 	main.panel._process(0.0)
 	assert_eq(main.panel.status_label.text, locked)
+	assert_eq(main.panel.status_label.get_theme_color("font_color"), UiColors.ERROR)   # the run's refusal, in red
 	main.arena.intent_override = PlayerIntent.make(Vector2.ZERO, Vector2(900, 450), true)
 	for i: int in 30:
 		main.arena.step(STEP)
@@ -162,6 +185,8 @@ func test_full_loop_build_play_reward_build() -> void:
 	assert_eq(run.flow.state, GameFlow.State.PLAY)
 	assert_same(main.arena.world.plan, run.active_plan)
 	assert_almost_eq(main.arena.world.player.hp, 60.0, 1e-4)
+	main.arena.world.player.hp = 47.0         # hurt in the wave: the run must take the arena's HP, not keep its own
+	watch_signals(main.arena)
 	var burned: bool = false
 	var steps: int = 0
 	while run.flow.state == GameFlow.State.PLAY and steps < 5400:
@@ -185,9 +210,13 @@ func test_full_loop_build_play_reward_build() -> void:
 	assert_true(main.arena.world.bullets.is_empty(), "the arena went idle: no frozen last frame")
 	assert_true(main.arena.view._fx.is_empty())
 	assert_true(main.panel.board.interaction.locked)
+	assert_eq(main.panel.board._lock_text, "CHOOSE A REWARD")
+	assert_eq(main.reward_overlay._wave_cleared, 1)
 	assert_true(main.panel.start_button.disabled)
-	var hp_left: float = run.player_hp
-	assert_gt(hp_left, 0.0)
+	assert_signal_emit_count(main.arena, "wave_cleared", 1)
+	var hp_left: float = get_signal_parameters(main.arena, "wave_cleared")[0]
+	assert_between(hp_left, 1.0, 47.0)
+	assert_almost_eq(run.player_hp, hp_left, 1e-4)
 	await wait_process_frames(2)              # the reward screen draws
 	var pick: RewardOffer = run.offers[0]
 	var had: int = run.inventory.count(pick.kind)
@@ -206,6 +235,18 @@ func test_full_loop_build_play_reward_build() -> void:
 	var stock: Dictionary = run.inventory.to_dict()
 	_key(main, KEY_2)                         # no reward is up any more
 	assert_eq(run.inventory.to_dict(), stock)
+	await wait_process_frames(2)
+	# wave 2 with the player idle: the run ends, and the result counts wave 1 and its kills
+	_key(main, KEY_SPACE)
+	assert_eq(main.panel.board._lock_text, "LOCKED · WAVE 2 IN PROGRESS")
+	main.arena.intent_override = PlayerIntent.make(Vector2.ZERO, Vector2.ZERO, false)
+	steps = 0
+	while run.flow.state == GameFlow.State.PLAY and steps < 3600:
+		main.arena.step(STEP)
+		steps += 1
+	assert_eq(run.flow.state, GameFlow.State.GAME_OVER)
+	assert_eq(main.panel.board._lock_text, "GAME OVER")
+	assert_eq(main.game_over_overlay.result_text, "Survived 1 wave · 6 kills")
 	await wait_process_frames(2)
 
 
@@ -274,7 +315,11 @@ func test_real_mouse_builds_and_wires_a_burning_gun() -> void:
 	var spec: BulletSpec = run.plan.bullets[0]
 	assert_eq([run.plan.bullets.size(), spec.fire_level, spec.speed_level], [1, 1, 1])
 	assert_eq(main.panel.readout.label.text.get_slice("\n", 1), "#1 " + spec.describe())
-	await Mouse.click(self, BOARD + Vector2(360, 100), MOUSE_BUTTON_RIGHT)   # remove Speed Up: refund and heal
+	await Mouse.drag(self, BOARD + Vector2(360, 80), BOARD + Vector2(360, 360))   # Speed Up down to (8, 8)
+	assert_eq(run.graph.get_machine(4).cell, Vector2i(8, 8))
+	assert_eq(run.graph.to_dict()["wires"], ["1:0>3:0", "3:0>4:0", "4:0>2:0"])   # its belts followed
+	assert_eq(run.inventory.count(MachineCatalog.SPEED_UP), 0)
+	await Mouse.click(self, BOARD + Vector2(360, 340), MOUSE_BUTTON_RIGHT)   # remove Speed Up: refund and heal
 	assert_false(run.graph.has_machine(4))
 	assert_eq(run.inventory.count(MachineCatalog.SPEED_UP), 1)
 	assert_eq(run.graph.to_dict()["wires"], ["1:0>3:0", "3:0>2:0"])

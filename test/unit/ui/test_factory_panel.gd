@@ -162,6 +162,25 @@ func test_start_button_state_and_text() -> void:
 	await wait_process_frames(2)
 
 
+## E.7: the worst case, 12 lines, fills the 204 px label exactly, so the last line stays inside the readout box.
+func test_readout_fits_the_worst_case() -> void:
+	var panel: FactoryPanel = _panel(FactoryGraph.create_default(), Inventory.new())
+	var specs: Array[BulletSpec] = []
+	for i: int in 8:
+		specs.append(BulletSpec.from_counts({MachineCatalog.FIRE: 3, MachineCatalog.ICE: 3, MachineCatalog.POISON: 3,
+				MachineCatalog.SPEED_UP: 3, MachineCatalog.SIZE_UP: 3, MachineCatalog.PIERCE: 4}, 3))
+	var plan: ShotPlan = Fixtures.plan_of(specs)
+	for id: int in range(3, 8):
+		plan.issues.append(PlanIssue.make(PlanIssue.Code.IDLE, id, "idle %d" % id))
+	panel.set_plan(plan)
+	await wait_process_frames(2)
+	var label: Label = panel.readout.label
+	assert_eq(label.get_line_count(), 12)
+	assert_eq(label.get_visible_line_count(), 12)
+	assert_eq(label.size, Vector2(420, 204))
+	assert_lte(label.position.y + label.size.y, ShotReadout.READOUT_SIZE.y)
+
+
 func test_message_expires() -> void:
 	var panel: FactoryPanel = _panel(FactoryGraph.create_default(), Inventory.new())
 	panel.set_start_state(1, true, "")
@@ -395,6 +414,49 @@ func test_machine_drag_off_floor_emits_remove() -> void:
 	assert_signal_emit_count(panel.board, "remove_requested", 1)
 	assert_signal_emitted_with_parameters(panel.board, "remove_requested", [3])
 	assert_signal_not_emitted(panel.board, "move_requested")
+
+
+func test_machine_drag_on_floor_emits_move() -> void:
+	await Mouse.prepare(self)
+	var g: FactoryGraph = FactoryGraph.create_default()
+	assert_eq(g.add_machine(MachineCatalog.FIRE, Vector2i(5, 1)), 3)
+	var panel: FactoryPanel = _panel(g, Fixtures.inventory_all(1))
+	watch_signals(panel.board)
+	# grabbed at its centre and released 80 px right and down: the ghost sits on cell (7, 3)
+	await Mouse.drag(self, FactoryPanel.BOARD_POS + Vector2(240, 80), FactoryPanel.BOARD_POS + Vector2(320, 160))
+	assert_signal_emit_count(panel.board, "move_requested", 1)
+	assert_signal_emitted_with_parameters(panel.board, "move_requested", [3, Vector2i(7, 3)])
+	assert_signal_not_emitted(panel.board, "remove_requested")
+	assert_signal_not_emitted(panel.board, "refused")
+	assert_eq(g.get_machine(3).cell, Vector2i(5, 1))   # the board only asks
+
+
+## Losing the window's focus mid-gesture drops the board's mouse focus, and no release reaches it afterwards: the
+## gesture must end there, or its ghost would follow a cursor with no button held.
+func test_focus_loss_ends_a_board_gesture() -> void:
+	await Mouse.prepare(self)
+	var g: FactoryGraph = Fixtures.chain([MachineCatalog.FIRE])   # Fire #3 at (3, 1), its output at (200, 80)
+	var board: FactoryBoard = _panel(g, Fixtures.inventory_all(1)).board
+	watch_signals(board)
+	var starts: Array[Vector2] = [Vector2(160, 80), Vector2(200, 80)]   # Fire's body, then its output
+	var modes: Array[BoardInteraction.Mode] = [BoardInteraction.Mode.DRAG_MACHINE, BoardInteraction.Mode.DRAG_WIRE]
+	var lost: Array[int] = [NOTIFICATION_APPLICATION_FOCUS_OUT, NOTIFICATION_WM_WINDOW_FOCUS_OUT]
+	for i: int in starts.size():
+		var at: Vector2 = FactoryPanel.BOARD_POS + starts[i]
+		var to: Vector2 = at + Vector2(80, 160)   # a free cell for Fire: a release would move it
+		Mouse.move(at, at, 0)
+		await wait_process_frames(1)
+		Mouse.button(at, true)
+		await wait_process_frames(1)
+		Mouse.move(to, at, MOUSE_BUTTON_MASK_LEFT)
+		await wait_process_frames(1)
+		assert_eq(board.interaction.mode, modes[i])
+		get_tree().root.propagate_notification(lost[i])
+		assert_eq(board.interaction.mode, BoardInteraction.Mode.IDLE)
+		Mouse.button(to, false)
+		await wait_process_frames(2)
+	for s: String in ["move_requested", "remove_requested", "connect_requested", "refused"]:
+		assert_signal_not_emitted(board, s)
 
 
 func test_right_click_belt_emits_disconnect() -> void:

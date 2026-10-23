@@ -88,6 +88,13 @@ func _gui_input(event: InputEvent) -> void:
 		interaction.motion(motion.position)
 
 
+## Losing focus drops this board's mouse focus, and no release reaches _gui_input after that, so the gesture ends
+## here; otherwise its ghost would follow a cursor with no button held.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_WINDOW_FOCUS_OUT or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		cancel_interaction()
+
+
 func _can_drop_data(at: Vector2, data: Variant) -> bool:
 	if not (data is Dictionary and data.get("type") == DRAG_TYPE):
 		return false
@@ -190,8 +197,9 @@ func _rebuild_belts() -> void:
 	_belts.append_array(live)
 	_routes.clear()
 	_items.clear()
+	var routes: Dictionary[String, PackedVector2Array] = BoardLayout.belt_routes(interaction.graph)
 	for i: int in _belts.size():
-		_routes.append(BoardLayout.belt_points(interaction.graph, _belts[i]))
+		_routes.append(routes[_belts[i].key()])
 		var colors: PackedColorArray = []
 		if i >= _first_live:
 			for spec: BulletSpec in _plan.streams_on(_belts[i]):

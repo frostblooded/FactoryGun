@@ -298,6 +298,28 @@ func test_spawns_outside_and_away_from_player() -> void:
 	assert_eq(bad, PackedStringArray())
 
 
+## F.3: spawn k arrives alone, on the first step at or after 1.0 + k · spawn_interval(w).
+func test_spawns_follow_the_schedule() -> void:
+	var idle: PlayerIntent = PlayerIntent.make(Vector2.ZERO, AIM_RIGHT, false)
+	for wave: int in [1, 10]:                 # spawns 1.0 s and 0.55 s apart
+		var world: ArenaWorld = ArenaWorld.new()
+		world.begin_wave(wave, ShotPlan.empty(), Seeds.derive(7, wave, Seeds.WAVE), 1e9)   # the player outlives the wave
+		# nobody dies, so past 40 alive the cap holds the rest back (test_live_enemy_cap)
+		var due: int = mini(world.enemies_remaining(), SimTuning.MAX_LIVE_ENEMIES)
+		var wrong: PackedStringArray = []
+		var before: float = 0.0               # the previous step's time
+		while world.enemies.size() < due and world.time < 60.0:
+			var k: int = world.enemies.size()
+			world.step(STEP, idle)
+			var arrived: int = world.enemies.size() - k
+			var at: float = SimTuning.FIRST_SPAWN_DELAY + k * SimTuning.spawn_interval(wave)
+			if arrived > 0 and (arrived != 1 or before >= at or world.time < at):
+				wrong.append("wave %d: %d at %.3f s; spawn %d is due at %.3f s" % [wave, arrived, world.time, k, at])
+			before = world.time
+		assert_eq(world.enemies.size(), due)
+		assert_eq(wrong, PackedStringArray())
+
+
 func test_live_enemy_cap() -> void:
 	var world: ArenaWorld = ArenaWorld.new()
 	world.begin_wave(1, ShotPlan.empty(), Seeds.derive(1, 1, Seeds.WAVE), Tuning.PLAYER_MAX_HP)
@@ -344,6 +366,38 @@ func test_wave_clears_after_grace() -> void:
 	assert_true(world.step(STEP, idle).is_empty())   # finished: nothing more happens
 
 
+## The clear needs everything spawned, not just an empty field: between two spawns nobody may be alive.
+func test_wave_clear_waits_for_every_spawn() -> void:
+	var idle: PlayerIntent = PlayerIntent.make(Vector2.ZERO, AIM_RIGHT, false)
+	var world: ArenaWorld = ArenaWorld.new()
+	world.begin_wave(1, ShotPlan.empty(), Seeds.derive(1, 1, Seeds.WAVE), Tuning.PLAYER_MAX_HP)
+	while world.enemies.is_empty() and world.time < 2.0:
+		world.step(STEP, idle)
+	assert_eq(world.enemies.size(), 1)        # the first Grunt, at 1 s
+	world.enemies[0].hp = 0.0
+	var gap: Array[SimEvent] = _run(world, 50, idle)
+	assert_lt(world.time, 2.0)                # the second one is due at 2 s
+	assert_eq(_of(gap, SimEvent.Type.KILL).size(), 1)
+	assert_true(_of(gap, SimEvent.Type.WAVE_CLEARED).is_empty())
+	assert_true(world.is_running())
+	assert_true(world.enemies.is_empty())
+	assert_eq(world.enemies_remaining(), 5)
+	# The other five die as they arrive: the clear still waits the whole grace after the last kill.
+	var last_kill: int = -1
+	var cleared_at: int = -1
+	for i: int in 600:
+		for e: EnemyState in world.enemies:
+			e.hp = 0.0
+		var events: Array[SimEvent] = world.step(STEP, idle)
+		if not _of(events, SimEvent.Type.KILL).is_empty():
+			last_kill = i
+		if not _of(events, SimEvent.Type.WAVE_CLEARED).is_empty():
+			cleared_at = i
+			break
+	assert_eq(world.kills, 6)
+	assert_between(cleared_at - last_kill + 1, 60, 61)   # counting the kill's step as 1, as above
+
+
 func test_death_wins_over_clear() -> void:
 	# The clear needs a second without enemies, and only enemies hurt the player, so drop the HP of one of two
 	# identical worlds right before the step on which the other one clears.
@@ -368,6 +422,33 @@ func test_death_wins_over_clear() -> void:
 	world.spawn_enemy(GRUNT, Vector2(520, 450))
 	assert_eq(_types(world.step(STEP, idle)), [SimEvent.Type.PLAYER_HIT, SimEvent.Type.PLAYER_DIED])
 	assert_eq(world.player.hp, 0.0)
+
+
+## The game keeps one world for every wave (ArenaController), so begin_wave must leave nothing of the last wave
+## behind (F.5): neither the gun's cooldown nor the clear grace already served.
+func test_begin_wave_on_a_used_world_starts_fresh() -> void:
+	var fire: PlayerIntent = PlayerIntent.make(Vector2.ZERO, AIM_RIGHT, true)
+	var idle: PlayerIntent = PlayerIntent.make(Vector2.ZERO, AIM_RIGHT, false)
+	var world: ArenaWorld = ArenaWorld.new()
+	world.begin_wave(1, Fixtures.plan_of([BulletSpec.new()]), 5, Tuning.PLAYER_MAX_HP)
+	world.cancel_spawns()
+	_run(world, 50, idle)
+	var shots: int = 0
+	for i: int in 70:                         # fire through the end of the grace
+		if not world.is_running():
+			break
+		shots += _of(world.step(STEP, fire), SimEvent.Type.SHOT).size()
+	assert_true(world.is_finished())
+	assert_eq(shots, 1)                       # on step 51: the gun was still cooling down at the clear
+	world.begin_wave(2, world.plan, 6, Tuning.PLAYER_MAX_HP)
+	assert_eq(_of(world.step(STEP, fire), SimEvent.Type.SHOT).size(), 1)   # step 1 fires, as in any wave
+	world.cancel_spawns()
+	var cleared_at: int = -1
+	for i: int in 120:
+		if not _of(world.step(STEP, idle), SimEvent.Type.WAVE_CLEARED).is_empty():
+			cleared_at = i + 1
+			break
+	assert_between(cleared_at, 60, 61)        # a whole grace again
 
 
 func test_determinism_same_seed_same_hash_different_seed_differs() -> void:

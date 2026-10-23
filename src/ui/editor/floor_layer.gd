@@ -26,4 +26,5 @@ func _draw() -> void:
 				var inset: Rect2 = plate.grow(-BOLT_INSET)
 				for bolt: Vector2 in [inset.position, Vector2(inset.end.x, inset.position.y),
 						Vector2(inset.position.x, inset.end.y), inset.end]:
-					draw_circle(bolt, 1.4, UiColors.STEEL)
+					# a square, not a circle: rects batch, while each circle is a draw call of its own (336 bolts, every frame)
+					draw_rect(Rect2(bolt - Vector2(1.4, 1.4), Vector2(2.8, 2.8)), UiColors.STEEL)

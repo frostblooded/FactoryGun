@@ -20,7 +20,8 @@ static func draw_machine(ci: CanvasItem, kind: StringName, rect: Rect2, id: int,
 	ci.draw_rect(body, _a(UiColors.OUTLINE, alpha), false, 2.0)
 	ci.draw_rect(Rect2(body.position + Vector2(10, 6), Vector2(body.size.x - 20, 5)), _a(def.color, alpha))
 	for corner: Vector2 in [Vector2(6, 6), Vector2(body.size.x - 6, 6), Vector2(6, body.size.y - 6), body.size - Vector2(6, 6)]:
-		ci.draw_circle(body.position + corner, 1.6, _a(UiColors.RIVET, alpha))
+		# squares batch with the body rects; a circle costs a draw call of its own
+		ci.draw_rect(Rect2(body.position + corner - Vector2(1.6, 1.6), Vector2(3.2, 3.2)), _a(UiColors.RIVET, alpha))
 	if not (still and animates(kind)):
 		draw_machine_icon(ci, kind, rect, alpha, t)
 	ci.draw_string(font, Vector2(rect.position.x, rect.end.y - 10), def.short_name, HORIZONTAL_ALIGNMENT_CENTER,

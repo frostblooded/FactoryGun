@@ -111,6 +111,131 @@ func test_belt_at_and_input_magnet() -> void:
 	assert_null(BoardLayout.nearest_input(g, Vector2(40, 240), BoardLayout.MAGNET, -1))   # the Source has no input
 
 
+## Unrelated belts never run along one line or meet end to end, which would draw a connection that does not exist;
+## hover and cuts then find each belt on its own track.
+func test_unrelated_belts_keep_their_own_tracks() -> void:
+	# Bullet -> Ice #3 goes around up the gap at x 140, where Ice -> Fire #4 (a short Z) would climb too, and the
+	# Source's stub would end where Fire's input leg starts: a Bullet -> Fire belt on screen.
+	var g: FactoryGraph = FactoryGraph.create_default()
+	assert_eq(g.add_machine(MachineCatalog.ICE, Vector2i(1, 8)), 3)
+	assert_eq(g.add_machine(MachineCatalog.FIRE, Vector2i(4, 5)), 4)
+	_wire(g, [[1, 0, 3, 0], [3, 0, 4, 0], [4, 0, 2, 0]])
+	assert_eq(BoardLayout.belt_points(g, g.wire_from(1, 0)), PackedVector2Array([
+		Vector2(120, 240), Vector2(140, 240), Vector2(140, 300), Vector2(20, 300), Vector2(20, 360), Vector2(40, 360)]))
+	assert_eq(BoardLayout.belt_points(g, g.wire_from(3, 0)), PackedVector2Array([   # one lane over
+		Vector2(120, 360), Vector2(148, 360), Vector2(148, 240), Vector2(160, 240)]))
+	assert_eq(_shared_lines(g), PackedStringArray())
+	assert_eq(BoardLayout.hit_test(g, Vector2(139, 270)).wire.key(), "1:0>3:0")
+	assert_eq(BoardLayout.hit_test(g, Vector2(149, 300)).wire.key(), "3:0>4:0")
+	# Built in play: Source -> Ice #3 and Size Up #5 -> Fire #4 both went up x 100 and along y 220
+	var p: FactoryGraph = FactoryGraph.create_default()
+	assert_eq(p.move_machine(FactoryGraph.SOURCE_ID, Vector2i(0, 1)), GraphError.Code.OK)
+	assert_eq(p.add_machine(MachineCatalog.ICE, Vector2i(1, 8)), 3)
+	assert_eq(p.add_machine(MachineCatalog.FIRE, Vector2i(3, 1)), 4)
+	assert_eq(p.add_machine(MachineCatalog.SIZE_UP, Vector2i(11, 8)), 5)
+	_wire(p, [[1, 0, 3, 0], [3, 0, 5, 0], [5, 0, 4, 0], [4, 0, 2, 0]])
+	assert_eq(BoardLayout.belt_points(p, p.wire_from(1, 0)), PackedVector2Array([
+		Vector2(80, 80), Vector2(100, 80), Vector2(100, 220), Vector2(20, 220), Vector2(20, 360), Vector2(40, 360)]))
+	assert_eq(BoardLayout.belt_points(p, p.wire_from(5, 0)), PackedVector2Array([
+		Vector2(520, 360), Vector2(540, 360), Vector2(540, 228), Vector2(108, 228), Vector2(108, 80), Vector2(120, 80)]))
+	assert_eq(BoardLayout.belt_points(p, p.wire_from(3, 0)), PackedVector2Array([Vector2(120, 360), Vector2(440, 360)]))
+	assert_eq(_shared_lines(p), PackedStringArray())
+	assert_eq(BoardLayout.hit_test(p, Vector2(101, 150)).wire.key(), "1:0>3:0")
+	assert_eq(BoardLayout.hit_test(p, Vector2(107, 150)).wire.key(), "5:0>4:0")
+	# the board draws the routes that hit-testing uses
+	var board: FactoryBoard = FactoryBoard.new()
+	add_child_autofree(board)
+	board.bind(p, Inventory.new())
+	for i: int in board._belts.size():
+		assert_eq(board._routes[i], BoardLayout.belt_points(p, board._belts[i]))
+
+
+## The cases that make belt_routes() move a belt, one each.
+func test_belt_routes_move_off_placed_legs() -> void:
+	# Straight belts cannot move, so they go first: the around lane of Fire #3 -> Ice #4 moves off the y 160 of
+	# Poison #5 -> Pierce #6, though its belt comes first in canonical order.
+	var s: FactoryGraph = FactoryGraph.create_default()
+	assert_eq(s.disconnect_wire(s.wire_from(FactoryGraph.SOURCE_ID, 0)), GraphError.Code.OK)
+	assert_eq(s.add_machine(MachineCatalog.FIRE, Vector2i(5, 1)), 3)
+	assert_eq(s.add_machine(MachineCatalog.ICE, Vector2i(4, 5)), 4)
+	assert_eq(s.add_machine(MachineCatalog.POISON, Vector2i(0, 3)), 5)
+	assert_eq(s.add_machine(MachineCatalog.PIERCE, Vector2i(9, 3)), 6)
+	_wire(s, [[3, 0, 4, 0], [5, 0, 6, 0]])
+	assert_eq(BoardLayout.belt_points(s, s.wire_from(5, 0)), PackedVector2Array([Vector2(80, 160), Vector2(360, 160)]))
+	assert_eq(BoardLayout.belt_points(s, s.wire_from(3, 0)), PackedVector2Array([
+		Vector2(280, 80), Vector2(300, 80), Vector2(300, 168), Vector2(140, 168), Vector2(140, 240), Vector2(160, 240)]))
+	assert_eq(_shared_lines(s), PackedStringArray())
+	# Stubs count too. Splitter #3's belt into Fire #4 would end on the Source's stub (y 240, x 120..140), so its Z
+	# moves right; Poison #6's belt into Size Up #7 would start on the end of that belt (y 360, x 136..160), so its
+	# Z moves left. Either would show a belt between machines that are not wired.
+	var t: FactoryGraph = FactoryGraph.create_default()
+	assert_eq(t.add_machine(MachineCatalog.SPLITTER, Vector2i(1, 2)), 3)
+	assert_eq(t.add_machine(MachineCatalog.FIRE, Vector2i(4, 5)), 4)
+	assert_eq(t.add_machine(MachineCatalog.ICE, Vector2i(1, 8)), 5)
+	_wire(t, [[1, 0, 5, 0], [3, 0, 4, 0]])
+	assert_eq(BoardLayout.belt_points(t, t.wire_from(3, 0)), PackedVector2Array([
+		Vector2(120, 100), Vector2(144, 100), Vector2(144, 240), Vector2(160, 240)]))
+	assert_eq(_shared_lines(t), PackedStringArray())
+	var u: FactoryGraph = FactoryGraph.create_default()
+	assert_eq(u.disconnect_wire(u.wire_from(FactoryGraph.SOURCE_ID, 0)), GraphError.Code.OK)
+	assert_eq(u.add_machine(MachineCatalog.SPLITTER, Vector2i(1, 1)), 3)
+	assert_eq(u.add_machine(MachineCatalog.FIRE, Vector2i(4, 8)), 4)
+	assert_eq(u.add_machine(MachineCatalog.POISON, Vector2i(1, 8)), 5)
+	assert_eq(u.add_machine(MachineCatalog.SIZE_UP, Vector2i(4, 5)), 6)
+	_wire(u, [[3, 0, 4, 0], [5, 0, 6, 0]])
+	assert_eq(BoardLayout.belt_points(u, u.wire_from(3, 0)), PackedVector2Array([
+		Vector2(120, 60), Vector2(136, 60), Vector2(136, 360), Vector2(160, 360)]))
+	assert_eq(BoardLayout.belt_points(u, u.wire_from(5, 0)), PackedVector2Array([
+		Vector2(120, 360), Vector2(132, 360), Vector2(132, 240), Vector2(160, 240)]))
+	assert_eq(_shared_lines(u), PackedStringArray())
+	# The search tries a lane either way, then two, on the floor and keeping STUB / 2 of stub at a port.
+	var z: PackedVector2Array = PackedVector2Array([Vector2(120, 360), Vector2(140, 360), Vector2(140, 240),
+			Vector2(160, 240)])
+	var taken: Dictionary[String, PackedVector2Array] = {"v140": PackedVector2Array([Vector2(200, 400)]),
+			"v148": PackedVector2Array([Vector2(200, 400)])}
+	assert_eq(BoardLayout._off_lines(z, taken)[1], Vector2(132, 360))     # +1 is taken: -1
+	taken["v132"] = PackedVector2Array([Vector2(200, 400)])
+	assert_eq(BoardLayout._off_lines(z, taken)[1], Vector2(140, 360))     # 2 lanes would leave a stub under 10 px
+	var around: PackedVector2Array = PackedVector2Array([Vector2(280, 80), Vector2(300, 80), Vector2(300, 160),
+			Vector2(140, 160), Vector2(140, 240), Vector2(160, 240)])
+	var rows: Dictionary[String, PackedVector2Array] = {"h152": PackedVector2Array([Vector2(0, 560)]),
+			"h160": PackedVector2Array([Vector2(0, 560)]), "h168": PackedVector2Array([Vector2(0, 560)])}
+	assert_eq(BoardLayout._off_lines(around, rows)[2], Vector2(300, 176))   # both neighbours taken: +2
+
+
+func _wire(g: FactoryGraph, belts: Array) -> void:
+	for b: Array in belts:
+		assert_eq(g.connect_ports(b[0], b[1], b[2], b[3]), GraphError.Code.OK)
+
+
+## "a | b" for each two belts with legs on one line that overlap or touch, but for belts into one input: they
+## merge there, so their last stubs always meet.
+func _shared_lines(g: FactoryGraph) -> PackedStringArray:
+	var out: PackedStringArray = []
+	var wires: Array[Wire] = g.wires()
+	for i: int in wires.size():
+		for j: int in range(i + 1, wires.size()):
+			if wires[i].to_id == wires[j].to_id:
+				continue
+			var a: PackedVector2Array = BoardLayout.belt_points(g, wires[i])
+			var b: PackedVector2Array = BoardLayout.belt_points(g, wires[j])
+			for s: int in a.size() - 1:
+				for t: int in b.size() - 1:
+					if _on_one_line(a[s], a[s + 1], b[t], b[t + 1]):
+						out.append("%s | %s" % [wires[i].key(), wires[j].key()])
+	return out
+
+
+func _on_one_line(p: Vector2, q: Vector2, r: Vector2, s: Vector2) -> bool:
+	if p == q or r == s:
+		return false
+	if p.x == q.x and r.x == s.x and p.x == r.x:
+		return minf(p.y, q.y) <= maxf(r.y, s.y) and minf(r.y, s.y) <= maxf(p.y, q.y)
+	if p.y == q.y and r.y == s.y and p.y == r.y:
+		return minf(p.x, q.x) <= maxf(r.x, s.x) and minf(r.x, s.x) <= maxf(p.x, q.x)
+	return false
+
+
 func _port_names(refs: Array[PortRef]) -> Array[String]:
 	var out: Array[String] = []
 	for r: PortRef in refs:
