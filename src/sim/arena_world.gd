@@ -101,6 +101,16 @@ func state_hash() -> int:
 	return hash(parts)
 
 
+## The auto-aim target: the live enemy nearest the player, or null. A tie keeps the lower id.
+func nearest_enemy() -> EnemyState:
+	var best: EnemyState = null
+	for e: EnemyState in enemies:
+		if e.hp > 0.0 and (best == null
+				or player.pos.distance_squared_to(e.pos) < player.pos.distance_squared_to(best.pos)):
+			best = e
+	return best
+
+
 ## Used by step(); public for tests. Applies this wave's HP and speed scaling.
 func spawn_enemy(kind: EnemyType.Kind, pos: Vector2) -> int:
 	var t: EnemyType = EnemyType.get_type(kind)

@@ -22,8 +22,11 @@ const REASON_FONT_SIZE: int = 12
 const HAZARD_BAND: float = 14.0
 const CURSOR_GAP: float = 14.0            # the refusal box keeps this far from the cursor...
 const PREVIEW_GAP: float = 44.0           # ...and from a palette drag's 80x80 preview, centred on the cursor
+const CUT_SIZE: Vector2 = Vector2(64, 30)
+const CUT_OFFSET: Vector2 = Vector2(-32, -48)   # the Cut button's top-left from the tap: centred above the finger
 
 var interaction: BoardInteraction = BoardInteraction.new()
+var cut_button: Button = Button.new()     # shown over a tapped belt; cuts it
 var _plan: ShotPlan = ShotPlan.empty()
 var _lock_text: String = ""
 var _scroll: float = 0.0                  # how far live belts have moved, px
@@ -54,6 +57,12 @@ func _init() -> void:
 		layer.set_anchors_preset(Control.PRESET_FULL_RECT)
 		layer.show_behind_parent = layer != _lock_layer   # all but the lock go under this board's own drawing
 		add_child(layer)
+	cut_button.text = "CUT"
+	cut_button.size = CUT_SIZE
+	cut_button.focus_mode = Control.FOCUS_NONE
+	cut_button.visible = false
+	cut_button.pressed.connect(_on_cut_pressed)
+	add_child(cut_button)                 # after the lock layer, but hidden while locked
 	_belt_layer.draw.connect(_draw_belts)
 	_flow_layer.draw.connect(_draw_flow)
 	_machine_layer.draw.connect(_draw_machines)
@@ -71,6 +80,9 @@ func _process(delta: float) -> void:
 		_drop = null
 	if _look() != _static_look:
 		_redraw_static()
+	cut_button.visible = interaction.selected != null and not interaction.locked
+	if cut_button.visible:
+		cut_button.position = _inside(Rect2(interaction.selected_at + CUT_OFFSET, CUT_SIZE)).position
 	_flow_layer.queue_redraw()
 	_flame_layer.queue_redraw()
 	queue_redraw()
@@ -173,8 +185,13 @@ func _apply(action: BoardAction) -> void:
 
 ## Every graph mutation emits changed synchronously, so hover never names a removed machine or belt.
 func _on_graph_changed() -> void:
+	interaction.drop_stale_selection()
 	interaction.refresh_hover()
 	_rebuild_belts()
+
+
+func _on_cut_pressed() -> void:
+	_apply(interaction.cut_selected())
 
 
 ## Forget the last point, so a later graph change cannot re-hover a spot the mouse has left.
@@ -219,16 +236,18 @@ func _redraw_static() -> void:
 func _look() -> String:
 	var hovered: String = interaction.hover.wire.key() if interaction.hover.type == BoardHit.Type.BELT else ""
 	var splice: String = _drop.splice.key() if _drop != null and _drop.splice != null else ""
-	return "%d %s %s" % [_dragged(), hovered, splice]
+	var picked: String = interaction.selected.key() if interaction.selected != null else ""
+	return "%d %s %s %s" % [_dragged(), hovered, splice, picked]
 
 
 func _dragged() -> int:
 	return interaction.drag_id if interaction.mode == BoardInteraction.Mode.DRAG_MACHINE else -1
 
 
-## The hovered belt, and the belt a palette drag would splice into, are drawn brightened.
+## The hovered belt, the selected belt and the belt a palette drag would splice into are drawn brightened.
 func _is_lit(w: Wire) -> bool:
 	return (interaction.hover.type == BoardHit.Type.BELT and interaction.hover.wire.same_as(w)) \
+			or (interaction.selected != null and interaction.selected.same_as(w)) \
 			or (_drop != null and _drop.splice != null and _drop.splice.same_as(w))
 
 

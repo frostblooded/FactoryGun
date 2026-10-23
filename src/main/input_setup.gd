@@ -6,7 +6,6 @@ const MOVE_LEFT: StringName = &"move_left"          # physical A, Left
 const MOVE_RIGHT: StringName = &"move_right"        # physical D, Right
 const MOVE_UP: StringName = &"move_up"              # physical W, Up
 const MOVE_DOWN: StringName = &"move_down"          # physical S, Down
-const FIRE: StringName = &"fire"                    # left mouse button
 const START_WAVE: StringName = &"start_wave"        # Space, Enter, Keypad Enter
 const DELETE_HOVERED: StringName = &"delete_hovered"  # Delete, X
 const CANCEL: StringName = &"cancel"                # Escape
@@ -27,10 +26,6 @@ static func ensure_actions() -> void:
 	_add_keys(PICK[0], [KEY_1, KEY_KP_1])
 	_add_keys(PICK[1], [KEY_2, KEY_KP_2])
 	_add_keys(PICK[2], [KEY_3, KEY_KP_3])
-	if not InputMap.has_action(FIRE):
-		var click: InputEventMouseButton = InputEventMouseButton.new()
-		click.button_index = MOUSE_BUTTON_LEFT
-		_add_action(FIRE, [click])
 
 
 static func _add_keys(action: StringName, keys: Array[Key]) -> void:

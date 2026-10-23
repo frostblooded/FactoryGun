@@ -494,6 +494,19 @@ func test_determinism_same_seed_same_hash_different_seed_differs() -> void:
 
 
 ## Wave 1 with the schedule dropped and one enemy parked out of reach at speed 0, so the wave never clears.
+func test_nearest_enemy_is_the_auto_aim_target() -> void:
+	var world: ArenaWorld = _empty_wave()
+	assert_null(world.nearest_enemy())
+	var far_id: int = world.spawn_enemy(GRUNT, Vector2(900, 450))
+	var near_id: int = world.spawn_enemy(GRUNT, Vector2(500, 200))
+	world.spawn_enemy(GRUNT, Vector2(500, 700))           # as near as near_id: the lower id wins
+	assert_eq(world.nearest_enemy().id, near_id)
+	world.enemies[1].hp = 0.0                             # dead, not yet removed
+	assert_eq(world.nearest_enemy().id, near_id + 1)
+	world.enemies[2].hp = 0.0
+	assert_eq(world.nearest_enemy().id, far_id)
+
+
 func _world(plan: ShotPlan) -> ArenaWorld:
 	var world: ArenaWorld = ArenaWorld.new()
 	world.begin_wave(1, plan, Seeds.derive(1, 1, Seeds.WAVE), Tuning.PLAYER_MAX_HP)

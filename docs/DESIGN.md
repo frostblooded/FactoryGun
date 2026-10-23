@@ -23,7 +23,7 @@ FactoryGun splits the screen in two:
   - Drag belts from output ports to input ports.
   - The factory defines what the gun fires.
 - **Right (1000 px): the arena.** This is a top-down shooter.
-  - WASD moves, the mouse aims, and the left mouse button fires.
+  - WASD (or the touch stick) moves; the gun aims at the nearest enemy and fires on its own (F.8).
   - Enemies come in waves.
   - Bullet effects visibly apply on every hit.
 
@@ -55,6 +55,7 @@ If the player dies, the run goes to **GAME OVER**, then **Restart**.
 | Purity | `src/core` and `src/sim` are RefCounted-only pure logic. A test enforces this. |
 | Tests | GUT 9.5.0 vendored in `addons/gut`; tests in `res://test`; a post-run hook and a sanity test plug GUT's blind spots. |
 | CI | The existing `ci` job is unchanged except for **one appended step**: a clean-tree check plus a headless boot smoke. |
+| Touch | Playable on phones in landscape: a floating move stick, auto-aim and auto-fire for everyone, a trash bin and tap-to-cut belts in the editor, and a rotate hint in portrait (E.10, F.8, G.5). |
 | Art and audio | Everything is drawn procedurally with `draw_*`. No assets, no audio in v1, no network at runtime. |
 
 ### 0.2 Glossary
@@ -175,11 +176,14 @@ src/ui/editor/factory_board.gd        FactoryBoard        WP3
 src/ui/editor/palette_slot.gd         PaletteSlot         WP3
 src/ui/editor/shot_readout.gd         ShotReadout         WP3
 src/ui/editor/factory_panel.gd        FactoryPanel        WP3
+src/ui/editor/trash_bin.gd            TrashBin            touch (E.10)
 src/ui/arena/arena_view.gd            ArenaView           WP2
 src/ui/arena/hud.gd                   Hud                 WP2
 src/ui/arena/arena_controller.gd      ArenaController     WP2
+src/ui/arena/touch_stick.gd           TouchStick          touch (F.8)
 src/ui/overlays/reward_overlay.gd     RewardOverlay       WP4
 src/ui/overlays/game_over_overlay.gd  GameOverOverlay     WP4
+src/ui/overlays/rotate_hint.gd        RotateHint          touch (G.5)
 src/main/input_setup.gd               InputSetup          WP0
 src/main/main.tscn                                        WP0   (A.3; never edited again)
 src/main/main.gd                      Main                WP0 stub → WP4
@@ -730,7 +734,6 @@ const MOVE_LEFT: StringName = &"move_left"          # physical A, Left
 const MOVE_RIGHT: StringName = &"move_right"        # physical D, Right
 const MOVE_UP: StringName = &"move_up"              # physical W, Up
 const MOVE_DOWN: StringName = &"move_down"          # physical S, Down
-const FIRE: StringName = &"fire"                    # left mouse button
 const START_WAVE: StringName = &"start_wave"        # Space, Enter, Keypad Enter
 const DELETE_HOVERED: StringName = &"delete_hovered"  # Delete, X
 const CANCEL: StringName = &"cancel"                # Escape
@@ -739,8 +742,8 @@ const PICK: Array[StringName] = [&"pick_1", &"pick_2", &"pick_3"]   # 1/Keypad 1
 static func ensure_actions() -> void      # adds each missing action with the events listed above
 ```
 
-`FIRE` gets one `InputEventMouseButton` with `button_index = MOUSE_BUTTON_LEFT`. Every other action gets
-`InputEventKey` events with `physical_keycode` set. Physical keycodes make WASD work on AZERTY keyboards.
+Every action gets `InputEventKey` events with `physical_keycode` set. There is no fire action: the gun
+fires on its own (F.8). Physical keycodes make WASD work on AZERTY keyboards.
 
 Every event gets `device = -1` (all devices), as an `[input]` section in `project.godot` would store it. A
 new event's device is 0, and an action event with device 0 does not match a touch-emulated mouse click
@@ -1109,14 +1112,15 @@ tests can compute positions.
 | Element | Rect (x, y, w, h) | Content |
 |---|---|---|
 | Panel background | 0, 0, 600, 900 | `Panel` with the theme's PANEL_BG and PANEL_EDGE style box |
-| Title | 20, 12, 300, 44 | Label "FACTORY", size 20, ACCENT |
+| Title | 20, 12, 160, 44 | Label "FACTORY", size 20, ACCENT |
+| Trash bin | 196, 16, 150, 36 | `TrashBin` (E.10) |
 | Start button | 360, 18, 220, 32 | "START WAVE %d  [Space]"; disabled unless BUILD with a valid plan |
 | Board | 20, 64, 560, 480 | `FactoryBoard` (14×12 tiles of 40 px) |
 | Status line | 20, 552, 560, 22 | Label, size 12 (E.8) |
 | Palette | slot i at (20 + 78·i, 582), 72×88 | 7 `PaletteSlot`s in `PALETTE_ORDER` |
 | Readout | 20, 678, 560, 214 | `ShotReadout` (E.7); bottom edge at y 892 |
 
-`FactoryPanel` constants: `BOARD_POS = Vector2(20, 64)`, `PALETTE_POS = Vector2(20, 582)`,
+`FactoryPanel` constants: `BOARD_POS = Vector2(20, 64)`, `TRASH_POS = Vector2(196, 16)`, `PALETTE_POS = Vector2(20, 582)`,
 `SLOT_STEP = 78.0`, `READOUT_POS = Vector2(20, 678)`.
 
 ### E.2 Board rendering (Factorio look)
@@ -1333,7 +1337,9 @@ the graph and the inventory and never mutates them.
 ```
 IDLE --press LMB on output port--> DRAG_WIRE --release--> IDLE   (CONNECT / refusal / silent cancel)
 IDLE --press LMB on machine or input port--> PRESS_MACHINE --move > 6 px--> DRAG_MACHINE --release--> IDLE
-PRESS_MACHINE --release (no drag)--> IDLE (nothing: there is no selection in v1)
+PRESS_MACHINE --release (no drag)--> IDLE (nothing: machines are never selected)
+IDLE --press LMB on a belt--> IDLE with that belt selected (the Cut button shows)
+DRAG_WIRE --release within 6 px of the press, no target--> IDLE with the port's belt selected (if any)
 any --cancel() / set_locked(true) / RMB press while not IDLE--> IDLE
 ```
 
@@ -1341,7 +1347,9 @@ any --cancel() / set_locked(true) / RMB press while not IDLE--> IDLE
 |---|---|
 | Drag a palette slot onto the board | PLACE at `drop_cell(cursor)`. If a belt is within `SPLICE` (20 px) of the cursor and `can_splice` is OK, the placement splices into that belt. |
 | Drag a machine; release on the floor | MOVE to `ghost_cell()`; belts follow. If invalid: refused with the reason, and the machine stays. |
-| Drag a machine; release outside the floor | REMOVE (refund). For the Source or Output: refused with the NOT_REMOVABLE text. |
+| Drag a machine; release outside the floor | REMOVE (refund). For the Source or Output: refused with the NOT_REMOVABLE text. The trash bin (E.10) is the visible place to do this. |
+| Tap a belt, or tap an output port that carries one | Selects that belt: it is drawn lit and the board shows a Cut button above the tap. Any other left press drops the selection, as do `cancel()`, locking and the belt disappearing. |
+| Press the Cut button | `cut_selected()`: DISCONNECT the selected belt, or the LOCKED refusal while locked. |
 | Drag from an output port; release with an input port within 24 px (magnet, own machine excluded) | CONNECT (replaces that output's old belt). If refused: the reason, plus " This belt would make N." for TOO_MANY_BULLETS. |
 | Drag from an output port; release with no input port in range | Nothing (silent cancel). |
 | Right-click a machine, its input port, or an output port with no belt | REMOVE (refund), or the NOT_REMOVABLE refusal. |
@@ -1387,6 +1395,10 @@ func drop_preview(kind: StringName, p: Vector2) -> DropPreview
 	# LOCKED if locked; else OUT_OF_STOCK if inventory.count(kind) == 0; else splice if a belt is
 	# within SPLICE px of p and can_splice is OK; else can_add_machine(kind, drop_cell(p))
 func drop(kind: StringName, p: Vector2) -> BoardAction   # PLACE, or NONE with the preview's reason
+var selected: Wire = null                 # the tapped belt, or null
+var selected_at: Vector2                  # where it was tapped
+func cut_selected() -> BoardAction        # DISCONNECT selected and forget it; LOCKED refusal while locked
+func drop_stale_selection() -> void       # forget selected once the graph no longer has it
 func refusal_text() -> String
 ```
 
@@ -1445,6 +1457,11 @@ Input routing:
   - queues the flow layer, the flame layer and the board itself (`queue_redraw()`) every frame (E.2).
 - A graph change (`_on_graph_changed`), `bind` and `set_plan` rebuild the cached belt draw order (dead
   belts first), the routes (`BoardLayout.belt_routes`) and the item colours, then redraw the static layers.
+- **Cut button.** `cut_button` (64×30, "CUT", focus NONE) is a child added after the lock layer.
+  `_process` shows it while `interaction.selected != null` and the board is unlocked, with its top-left at
+  `selected_at + (−32, −48)` kept inside the board. Pressing it applies `interaction.cut_selected()`.
+  `_on_graph_changed` calls `drop_stale_selection()` first. The selected belt is lit like a hovered one,
+  and is part of `_look()`.
 - `mouse_exited`, when the mode is IDLE, sets `interaction.cursor = Vector2(-1, -1)` and calls
   `refresh_hover()`, so a later graph change cannot re-hover a point the mouse has left.
 - **Focus loss.** `_notification` calls `cancel_interaction()` on `NOTIFICATION_WM_WINDOW_FOCUS_OUT` and
@@ -1534,10 +1551,10 @@ the first of these that applies:
      `[capped]`, `[one-sided]`, `[dead end]` and `[idle]`. The tag comes first because the label trims the
      end, and the Splitter's description alone overruns it. The Source and Output omit `#id`.
    - Output port (with or without a belt): "Output port: drag to an input port to connect."
-   - Belt: "Belt: right-click or X to cut."
+   - Belt: "Belt: tap to cut, or right-click or X."
 3. If the editor is not locked and Start is disabled: `start_reason()`, in WARN. (The panel cannot see
    `GameFlow`, so "not locked" stands for BUILD.)
-4. Otherwise: "Drag machines onto the floor. Drag from an output port to wire. Right-click removes."
+4. Otherwise: "Drag machines onto the floor. Drag from an output port to wire. Drag to the bin to remove."
    (TEXT_DIM).
 
 ### E.9 `FactoryPanel` (Panel 600×900)
@@ -1581,6 +1598,18 @@ func show_message(text: String, is_error: bool) -> void
 
 ---
 
+### E.10 `TrashBin` (Control 150×36, mouse IGNORE) — touch
+
+Removing a machine is a drag off the floor (E.4), which needs no right-click, so it works with a finger.
+The bin, in the title row at `TRASH_POS`, makes that drop visible to mouse and touch players alike:
+
+- It draws a bin icon and "REMOVE" in TEXT_DIM.
+- `armed` (a removable machine is being dragged): ERROR outline and "DROP TO REMOVE".
+- `hot` (armed and the cursor is over the bin): filled with ERROR at 35%.
+- `FactoryPanel._process` calls `trash.set_state(armed, hot)` every frame from `board.interaction`; the
+  cursor is board-local, so it is offset by the board's position. The bin takes no input: the board still
+  owns the press, and its release outside the floor is the REMOVE.
+
 ## F. Arena (right side)
 
 ### F.1 World and numbers (`SimTuning`, WP2)
@@ -1617,14 +1646,13 @@ The number of live bullets needs no cap: at most `ceil(1.4 / 0.25) · 8 = 48` bu
 ### F.2 Player and gun
 
 - The player is a circle of r 13. It starts each wave at the centre (500, 450).
-- It moves at 240 px/s from `Input.get_vector(move_left, move_right, move_up, move_down)`, so diagonals
-  are normalised. It is clamped to `[13, 987] × [13, 887]`.
+- It moves at 240 px/s from `Input.get_vector(move_left, move_right, move_up, move_down)` plus the touch
+  stick (F.8), limited to length 1, so diagonals are normalised. It is clamped to `[13, 987] × [13, 887]`.
 - HP carries over between waves (`RunState.player_hp`). Contact damage makes the player invulnerable for
   0.6 s.
-- **Aim**: `intent.aim` is an arena-local target point (the mouse position, or the bot's target), not a
-  direction. The world sets `aim_dir = (intent.aim − player.pos).normalized()`. When that distance is
+- **Aim**: `intent.aim` is an arena-local target point (the nearest enemy, F.8), not a direction. The world sets `aim_dir = (intent.aim − player.pos).normalized()`. When that distance is
   under 1 px, it keeps the previous `aim_dir`.
-- **Fire**: while fire is held and `plan.is_valid()`, every 0.25 s the gun fires **all** of the plan's
+- **Fire**: while `intent.fire` (there is a live enemy) and `plan.is_valid()`, every 0.25 s the gun fires **all** of the plan's
   bullets at once:
   - Each bullet starts at the muzzle `player.pos + aim_dir·22`.
   - Its velocity is `aim_dir.rotated(spec.angle_offset) · spec.speed`.
@@ -1727,6 +1755,7 @@ func reset_idle(player_hp: float) -> void        # begin_wave's resets except wa
 func is_running() -> bool
 func is_finished() -> bool
 func enemies_remaining() -> int                  # alive + not yet spawned
+func nearest_enemy() -> EnemyState              # the live enemy nearest the player, lower id on a tie; or null
 func step(delta: float, intent: PlayerIntent) -> Array[SimEvent]
 func state_hash() -> int                         # hash([time, player pos/hp/invuln, kills, next spawn, cooldown,
                                                  #       rng.state] + per enemy [id, pos, hp] + per bullet [id, pos, pierce_left])
@@ -1759,7 +1788,8 @@ signal player_died(kills: int)
 var world: ArenaWorld = ArenaWorld.new()
 var view: ArenaView                       # child, mouse IGNORE, view.world = world
 var hud: Hud                              # child, mouse IGNORE
-# Both children get set_anchors_preset(Control.PRESET_FULL_RECT) in _init() and never a size (A.4.5).
+var stick: TouchStick                     # child, mouse IGNORE, over the HUD (F.8)
+# All three children get set_anchors_preset(Control.PRESET_FULL_RECT) in _init() and never a size (A.4.5).
 var intent_override: PlayerIntent = null  # tests set this instead of real input
 func start_wave(wave: int, plan: ShotPlan, wave_seed: int, hp: float) -> void   # begin_wave, clear FX, HUD banner "WAVE %d"
 func go_idle(hp: float, next_wave: int) -> void                                # reset_idle, clear FX, HUD idle
@@ -1783,18 +1813,18 @@ func step(delta: float) -> void:
 			wave_cleared.emit(world.player.hp, world.kills)
 
 func _read_intent() -> PlayerIntent:
-	var aim: Vector2 = get_local_mouse_position()
-	var fire: bool = Input.is_action_pressed(InputSetup.FIRE) and Rect2(Vector2.ZERO, size).has_point(aim)
-	return PlayerIntent.make(Input.get_vector(InputSetup.MOVE_LEFT, InputSetup.MOVE_RIGHT,
-			InputSetup.MOVE_UP, InputSetup.MOVE_DOWN), aim, fire)
+	var move: Vector2 = Input.get_vector(InputSetup.MOVE_LEFT, InputSetup.MOVE_RIGHT, InputSetup.MOVE_UP,
+			InputSetup.MOVE_DOWN) + stick.vector()
+	var target: EnemyState = world.nearest_enemy()
+	if target == null:
+		return PlayerIntent.make(move, world.player.pos + world.player.aim_dir, false)
+	return PlayerIntent.make(move, target.pos, true)
 ```
 
 - The signals are connected synchronously, not deferred. That is safe because emitting is the last thing
   `step()` does, and tests can then drive a whole wave with plain `step()` calls.
-- Mouse settings: `clip_contents = true`, `mouse_filter = MOUSE_FILTER_PASS`,
-  `mouse_default_cursor_shape = CURSOR_CROSS`.
-- `Input.is_action_pressed` keeps working while the GUI handles the click.
-- Fire requires the cursor to be over the arena, so clicking the locked editor never shoots.
+- Mouse settings: `clip_contents = true`, `mouse_filter = MOUSE_FILTER_PASS`. The cursor is the default
+  arrow: there is nothing to aim.
 - **Tests:** call `arena.set_physics_process(false)` first, then drive `step(SimTuning.STEP)`.
 
 ### F.7 `ArenaView` (WP2, Control) and `Hud` (WP2, Control)
@@ -1820,12 +1850,30 @@ SimEvents and aged in `_process`. They are purely visual and not part of the sim
   - while idle: `"BUILD PHASE"`.
 - **Banner:** `show_banner(text)` shows size-40 ACCENT text centred at y 300 for 1.5 s, fading over the
   last 0.5 s.
-- **Idle hint:** while idle, `"Build your gun on the left · press SPACE to start"` (size 16, TEXT_DIM)
+- **Idle hint:** while idle, `"Build your gun on the left · press START WAVE to begin"` (size 16, TEXT_DIM)
   at y 860.
 
 API: `set_wave(wave: int, running: bool)`, `set_stats(hp: float, enemies_left: int)` and
 `show_banner(text: String)`. `Hud` keeps its state in public fields, which tests read: `wave`, `running`,
 `hp`, `enemies_left`, `banner_text` and `banner_left` (seconds the banner still shows).
+
+---
+
+### F.8 Auto-aim and the touch stick — touch
+
+- **Auto-aim, for everyone.** `_read_intent` aims at `world.nearest_enemy()` and fires while there is one.
+  With no enemy it holds fire and keeps the barrel where it was. The player's only job is moving.
+- **`TouchStick`** (Control, full rect, mouse IGNORE, drawn over the HUD) is a floating stick:
+  - `ArenaController._input` handles `InputEventScreenTouch` and `InputEventScreenDrag` through
+    `make_input_local`. A press lands on the stick only while a wave runs and inside the arena rect, so
+    taps on the editor, a reward card or Restart never show it.
+  - The first finger becomes the stick's `origin`; other fingers are ignored until it lifts. Dragging puts
+    the knob at `origin + (p − origin).limit_length(RADIUS)` with `RADIUS = 70`, and `vector()` is
+    `(knob − origin) / RADIUS`: full speed at the rim.
+  - It draws a PANEL_BG disc at 35%, a TEXT ring at 40% and an ACCENT knob (r 26) at 60%, only while active.
+  - `start_wave` and `go_idle` reset it.
+- Touch screens also send emulated mouse events (Godot's default `emulate_mouse_from_touch`). The editor
+  relies on that for palette drags, machine drags and belt taps; the arena ignores mouse buttons.
 
 ---
 
@@ -1855,12 +1903,14 @@ extends Control
 
 const PANEL_RECT: Rect2 = Rect2(0, 0, 600, 900)
 const ARENA_RECT: Rect2 = Rect2(600, 0, 1000, 900)
+const SCREEN_RECT: Rect2 = Rect2(0, 0, 1600, 900)
 
 var run: RunState = RunState.new(randi())   # randi() is allowed outside core/sim
 var panel: FactoryPanel = FactoryPanel.new()
 var arena: ArenaController = ArenaController.new()
 var reward_overlay: RewardOverlay = RewardOverlay.new()
 var game_over_overlay: GameOverOverlay = GameOverOverlay.new()
+var rotate_hint: RotateHint = RotateHint.new()
 
 
 func _ready() -> void:
@@ -1870,6 +1920,7 @@ func _ready() -> void:
 	_add(arena, ARENA_RECT)
 	_add(reward_overlay, ARENA_RECT)        # overlays after the arena: drawn on top
 	_add(game_over_overlay, ARENA_RECT)
+	_add(rotate_hint, SCREEN_RECT)          # last: over everything
 	panel.bind(run.graph, run.inventory)
 	run.plan_changed.connect(_on_plan_changed)
 	run.flow.state_changed.connect(_on_state_changed)
@@ -1942,7 +1993,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				reward_overlay.choose(i)
 ```
 
-`_add(c, rect)` does `add_child(c)`, then sets `c.position` and `c.size`. The four controls keep their
+`_add(c, rect)` does `add_child(c)`, then sets `c.position` and `c.size`. The five controls keep their
 default anchors, so setting `size` does not warn (A.4.5). All connections go to methods, and Main is a
 Node, so there are no reference cycles.
 
@@ -1995,6 +2046,19 @@ Each overlay has its own `DIM`: `UiColors` is a WP0 file.
 - `"GAME OVER"` (size 48, ERROR) at y 330.
 - `result_text` (size 18) at y 390: `"Survived %d wave%s · %d kill%s"`, so "1 wave · 1 kill" and
   "2 waves · 6 kills".
+
+### G.5 `RotateHint` (Control, full screen) — touch
+
+The game is landscape only (project default `display/window/handheld/orientation`, landscape). On a touch
+screen held upright the 1600×900 view would be a thin strip, so `RotateHint` covers it:
+
+- `should_show(window_size, touchscreen)` is `touchscreen and window_size.y > window_size.x`. A narrow
+  desktop window is only letterboxed.
+- `_process` polls `DisplayServer.window_get_size()` and `DisplayServer.is_touchscreen_available()`. When
+  the answer changes it sets `visible` and `get_tree().paused`, so a running wave waits. It has
+  `process_mode = PROCESS_MODE_ALWAYS` to notice the turn back while paused, and mouse STOP.
+- It draws black at 90%, "ROTATE YOUR PHONE" (size 64, ACCENT) and "FactoryGun plays in landscape"
+  (size 32, TEXT), centred.
 
 ---
 
@@ -2207,11 +2271,11 @@ func test_core_and_sim_are_pure() -> void:
 
 func test_input_actions_are_registered() -> void:
 	InputSetup.ensure_actions()
-	var events_before: int = InputMap.action_get_events(InputSetup.FIRE).size()
+	var events_before: int = InputMap.action_get_events(InputSetup.START_WAVE).size()
 	InputSetup.ensure_actions()               # idempotent
-	assert_eq(InputMap.action_get_events(InputSetup.FIRE).size(), events_before)
+	assert_eq(InputMap.action_get_events(InputSetup.START_WAVE).size(), events_before)
 	for a: StringName in [InputSetup.MOVE_LEFT, InputSetup.MOVE_RIGHT, InputSetup.MOVE_UP, InputSetup.MOVE_DOWN,
-			InputSetup.FIRE, InputSetup.START_WAVE, InputSetup.DELETE_HOVERED, InputSetup.CANCEL,
+			InputSetup.START_WAVE, InputSetup.DELETE_HOVERED, InputSetup.CANCEL,
 			InputSetup.RESTART] + InputSetup.PICK:
 		assert_true(InputMap.has_action(a) and not InputMap.action_get_events(a).is_empty(), String(a))
 

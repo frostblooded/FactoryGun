@@ -9,12 +9,14 @@ const BOARD_POS: Vector2 = Vector2(20, 64)
 const PALETTE_POS: Vector2 = Vector2(20, 582)
 const SLOT_STEP: float = 78.0
 const READOUT_POS: Vector2 = Vector2(20, 678)
+const TRASH_POS: Vector2 = Vector2(196, 16)
 const PANEL_SIZE: Vector2 = Vector2(600, 900)
 const MESSAGE_TIME: float = 2.5
-const HINT: String = "Drag machines onto the floor. Drag from an output port to wire. Right-click removes."
+const HINT: String = "Drag machines onto the floor. Drag from an output port to wire. Drag to the bin to remove."
 
 var board: FactoryBoard
 var start_button: Button
+var trash: TrashBin
 var status_label: Label
 var slots: Array[PaletteSlot] = []        # PALETTE_ORDER
 var readout: ShotReadout
@@ -34,11 +36,14 @@ func _init() -> void:
 	var title: Label = Label.new()
 	title.text = "FACTORY"
 	title.position = Vector2(20, 12)
-	title.size = Vector2(300, 44)
+	title.size = Vector2(160, 44)
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 20)
 	title.add_theme_color_override("font_color", UiColors.ACCENT)
 	add_child(title)
+	trash = TrashBin.new()
+	trash.position = TRASH_POS
+	add_child(trash)
 	start_button = Button.new()
 	start_button.position = Vector2(360, 18)
 	start_button.size = Vector2(220, 32)
@@ -73,6 +78,7 @@ func _init() -> void:
 func _process(delta: float) -> void:
 	_message_left = maxf(_message_left - delta, 0.0)
 	var hover: BoardHit = board.interaction.hover
+	_refresh_trash()
 	var text: String = HINT
 	var color: Color = UiColors.TEXT_DIM
 	if _message_left > 0.0:
@@ -85,7 +91,7 @@ func _process(delta: float) -> void:
 		text = "Output port: drag to an input port to connect."
 		color = UiColors.TEXT
 	elif hover.type == BoardHit.Type.BELT:
-		text = "Belt: right-click or X to cut."
+		text = "Belt: tap to cut, or right-click or X."
 		color = UiColors.TEXT
 	elif not _locked and not _start_enabled and _start_reason != "":
 		text = _start_reason
@@ -134,6 +140,12 @@ func show_message(text: String, is_error: bool) -> void:
 func _refresh_palette() -> void:
 	for slot: PaletteSlot in slots:
 		slot.set_state(_inventory.count(slot.kind), _inventory.ever_owned(slot.kind), _locked)
+
+
+func _refresh_trash() -> void:
+	var ia: BoardInteraction = board.interaction
+	var armed: bool = ia.mode == BoardInteraction.Mode.DRAG_MACHINE and ia.graph.def_of(ia.drag_id).removable
+	trash.set_state(armed, armed and Rect2(TRASH_POS, TrashBin.BIN_SIZE).has_point(board.position + ia.cursor))
 
 
 func _refresh_start_button() -> void:

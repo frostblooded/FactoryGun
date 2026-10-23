@@ -9,7 +9,7 @@ const BANNER_TIME: float = 1.5
 const BANNER_FADE: float = 0.5
 const BANNER_Y: float = 300.0
 const HINT_Y: float = 860.0
-const IDLE_HINT: String = "Build your gun on the left · press SPACE to start"
+const IDLE_HINT: String = "Build your gun on the left · press START WAVE to begin"
 
 var wave: int = 1
 var running: bool = false
