@@ -380,6 +380,57 @@ func test_locked_refuses_everything() -> void:
 	assert_eq(ia.mode, BoardInteraction.Mode.PRESS_MACHINE)
 
 
+## Tap-to-place: an armed kind shows its ghost under the press, and the release places it where the finger lifts.
+func test_armed_tap_places_the_machine() -> void:
+	var g: FactoryGraph = Fixtures.chain([MachineCatalog.FIRE])
+	var ia: BoardInteraction = _bound(g)
+	assert_null(ia.armed_preview(), "nothing armed")
+	ia.arm(MachineCatalog.ICE)
+	ia.motion(Vector2(400, 360))              # a mouse hovering free floor already shows the ghost
+	var hovered: DropPreview = ia.armed_preview()
+	assert_eq([hovered.kind, hovered.cell, hovered.valid], [MachineCatalog.ICE, Vector2i(9, 8), true])
+	assert_eq(ia.press(Vector2(400, 360), MOUSE_BUTTON_LEFT).type, BoardAction.Type.NONE)
+	assert_eq(ia.mode, BoardInteraction.Mode.PLACE)
+	ia.motion(Vector2(440, 360))              # sliding the finger moves the ghost
+	assert_eq(ia.armed_preview().cell, Vector2i(10, 8))
+	var placed: BoardAction = ia.release(Vector2(440, 360))
+	assert_eq(placed.type, BoardAction.Type.PLACE)
+	assert_eq([placed.kind, placed.cell, placed.splice], [MachineCatalog.ICE, Vector2i(10, 8), null])
+	assert_eq(ia.mode, BoardInteraction.Mode.IDLE)
+	assert_eq(ia.armed, MachineCatalog.ICE, "still armed: the panel puts it back when none are left")
+	# a tap near a belt splices into it
+	var d: FactoryGraph = FactoryGraph.create_default()
+	var on_default: BoardInteraction = _bound(d)
+	on_default.arm(MachineCatalog.FIRE)
+	var spliced: BoardAction = _tap(on_default, Vector2(280, 254))
+	assert_eq([spliced.type, spliced.cell], [BoardAction.Type.PLACE, Vector2i(6, 5)])
+	assert_same(spliced.splice, d.wire_from(FactoryGraph.SOURCE_ID, 0))
+	# pressing a machine puts the armed one back, and does what it always did
+	assert_eq(_tap(ia, FIRE_BODY).type, BoardAction.Type.NONE)
+	assert_eq(ia.armed, &"")
+	# a refused spot says why, and places nothing
+	ia.arm(MachineCatalog.ICE)
+	var on_source: BoardAction = _tap(ia, Vector2(60, 290))   # free floor, but the 2x2 footprint covers the Source
+	assert_eq(on_source.type, BoardAction.Type.NONE)
+	assert_eq(on_source.refusal, GraphError.describe(GraphError.Code.CELL_OCCUPIED))
+	# lifting off the floor places nothing; Escape (cancel) and locking put it back
+	assert_eq(ia.armed, MachineCatalog.ICE, "a refusal keeps it armed")
+	assert_eq(ia.press(Vector2(400, 360), MOUSE_BUTTON_LEFT).type, BoardAction.Type.NONE)
+	assert_eq(ia.release(Vector2(-10, 360)).type, BoardAction.Type.NONE)
+	ia.cancel()
+	assert_eq(ia.armed, &"")
+	ia.arm(MachineCatalog.ICE)
+	ia.set_locked(true)
+	assert_eq(ia.armed, &"")
+	assert_null(ia.armed_preview())
+
+
+func _tap(ia: BoardInteraction, p: Vector2) -> BoardAction:
+	ia.motion(p)
+	ia.press(p, MOUSE_BUTTON_LEFT)
+	return ia.release(p)
+
+
 func _bound(g: FactoryGraph, inv: Inventory = null) -> BoardInteraction:
 	var ia: BoardInteraction = BoardInteraction.new()
 	ia.bind(g, inv if inv != null else Fixtures.inventory_all(1))

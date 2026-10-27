@@ -129,9 +129,10 @@ func test_render_smoke() -> void:
 	assert_gt(w.player.invuln, 0.0)
 	assert_false(w.bullets.is_empty())
 	await wait_process_frames(2)
-	assert_eq(arena.view.size, Vector2(1000, 900))   # full-rect children follow the arena
-	assert_eq(arena.hud.size, Vector2(1000, 900))
-	arena.go_idle(20.0, 5)                    # idle HUD: hint, BUILD PHASE, low-HP bar
+	assert_eq(arena.view.size, SimTuning.ARENA_SIZE)
+	assert_eq(arena.hud.size, Vector2(1600, 900))   # full-rect children follow the controller
+	assert_eq(arena.stick.size, Vector2(1600, 900))
+	arena.go_idle(20.0, 5)                    # idle HUD: READY, low-HP bar
 	await wait_process_frames(2)
 	assert_false(arena.is_running())
 
@@ -171,9 +172,9 @@ func test_touch_stick_moves_the_player() -> void:
 	_touch(0, Vector2(800, 600), false)
 	arena.start_wave(1, Fixtures.plan_of([BulletSpec.new()]), 7, 100.0)
 	arena.world.cancel_spawns()
-	_touch(0, Vector2(300, 600), true)        # over the editor
+	_touch(0, Vector2(300, 600), true)        # left of the controller
 	await wait_process_frames(1)
-	assert_false(arena.stick.is_active(), "a touch on the editor is not the stick")
+	assert_false(arena.stick.is_active(), "a touch outside the controller is not the stick")
 	_touch(0, Vector2(300, 600), false)
 	_touch(1, Vector2(800, 600), true)
 	await wait_process_frames(1)
@@ -263,8 +264,25 @@ func _arena() -> ArenaController:
 	var arena: ArenaController = ArenaController.new()
 	add_child_autofree(arena)
 	arena.set_physics_process(false)          # after _ready, which turns it on; tests drive step() directly
-	arena.size = Vector2(1000, 900)
+	arena.size = Vector2(1600, 900)           # the whole screen, as in the game
 	return arena
+
+
+## The arena is scaled to fit the screen's height, centred, with at least WING_MIN either side for the HUD.
+func test_arena_fills_the_middle_of_the_screen() -> void:
+	var arena: ArenaController = _arena()
+	assert_eq(arena.arena_rect(), Rect2(300, 0, 1000, 900))
+	assert_eq(arena.view.position, Vector2(300, 0))
+	assert_eq(arena.view.scale, Vector2.ONE)
+	assert_eq(arena.hud.arena, arena.arena_rect())
+	arena.size = Vector2(1950, 900)           # a wide phone: the same arena, wider wings
+	assert_eq(arena.arena_rect(), Rect2(475, 0, 1000, 900))
+	arena.size = Vector2(1600, 1200)          # a tablet: the wings limit the arena
+	assert_almost_eq(arena.arena_scale(), 1.08, 1e-4)
+	assert_eq(arena.view.scale, Vector2.ONE * arena.arena_scale())
+	assert_gte(arena.arena_rect().position.x, ArenaController.WING_MIN)
+	assert_gte(arena.hud.hp_bar_rect().size.x, 200.0, "room for the HP bar")
+	await wait_process_frames(2)
 
 
 func _go_idle_on_death(kills: int) -> void:

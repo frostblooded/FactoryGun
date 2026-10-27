@@ -58,10 +58,10 @@ func test_hit_test_priority() -> void:
 	var input: BoardHit = BoardLayout.hit_test(g, Vector2(125, 82))
 	assert_true(input.same_as(BoardHit.make(BoardHit.Type.PORT, 3, PortRef.make(3, 0, false))))
 	assert_true(BoardLayout.hit_test(g, Vector2(115, 240)).port.equals(PortRef.make(FactoryGraph.SOURCE_ID, 0, true)))
-	# 12 px is still a port, 13 px is not
+	# 16 px (a fingertip) is still a port, 17 px is not
 	assert_eq(BoardLayout.hit_test(g, Vector2(160, 80)).type, BoardHit.Type.MACHINE)
-	assert_eq(BoardLayout.hit_test(g, Vector2(132, 80)).type, BoardHit.Type.PORT)
-	assert_eq(BoardLayout.hit_test(g, Vector2(133, 80)).type, BoardHit.Type.MACHINE)
+	assert_eq(BoardLayout.hit_test(g, Vector2(136, 80)).type, BoardHit.Type.PORT)
+	assert_eq(BoardLayout.hit_test(g, Vector2(137, 80)).type, BoardHit.Type.MACHINE)
 	# a machine beats a belt running under it: the board draws machines over belts (E.2), so a click goes to what
 	# the player sees
 	var d: FactoryGraph = FactoryGraph.create_default()
@@ -93,8 +93,8 @@ func test_hit_test_priority() -> void:
 
 func test_belt_at_and_input_magnet() -> void:
 	var g: FactoryGraph = FactoryGraph.create_default()   # belt 1:0>2:0 along y 240, x 120..440
-	assert_eq(BoardLayout.belt_at(g, Vector2(300, 248), BoardLayout.BELT_HIT).key(), "1:0>2:0")   # 8 px is in
-	assert_null(BoardLayout.belt_at(g, Vector2(300, 249), BoardLayout.BELT_HIT))
+	assert_eq(BoardLayout.belt_at(g, Vector2(300, 252), BoardLayout.BELT_HIT).key(), "1:0>2:0")   # 12 px is in
+	assert_null(BoardLayout.belt_at(g, Vector2(300, 253), BoardLayout.BELT_HIT))
 	assert_null(BoardLayout.belt_at(g, Vector2(100, 240), BoardLayout.BELT_HIT))
 	assert_eq(BoardLayout.belt_at(g, Vector2(300, 260), BoardLayout.SPLICE).key(), "1:0>2:0")   # 20 px is in
 	assert_null(BoardLayout.belt_at(g, Vector2(300, 261), BoardLayout.SPLICE))
@@ -103,8 +103,8 @@ func test_belt_at_and_input_magnet() -> void:
 	assert_eq(g.add_machine(MachineCatalog.ICE, Vector2i(5, 3)), 4)    # input at (200, 160)
 	var near: PortRef = BoardLayout.nearest_input(g, Vector2(210, 95), BoardLayout.MAGNET, -1)   # 18 px away
 	assert_true(near.equals(PortRef.make(3, 0, false)))
-	assert_true(BoardLayout.nearest_input(g, Vector2(200, 104), BoardLayout.MAGNET, -1).equals(near))   # 24 px is in
-	assert_null(BoardLayout.nearest_input(g, Vector2(200, 105), BoardLayout.MAGNET, -1))
+	assert_true(BoardLayout.nearest_input(g, Vector2(200, 112), BoardLayout.MAGNET, -1).equals(near))   # 32 px is in
+	assert_null(BoardLayout.nearest_input(g, Vector2(200, 113), BoardLayout.MAGNET, -1))
 	assert_true(BoardLayout.nearest_input(g, Vector2(200, 140), BoardLayout.MAGNET, -1).equals(PortRef.make(4, 0, false)))
 	assert_null(BoardLayout.nearest_input(g, Vector2(205, 80), BoardLayout.MAGNET, 3))   # its own machine is excluded
 	assert_true(BoardLayout.nearest_input(g, Vector2(430, 240), BoardLayout.MAGNET, 3).equals(PortRef.make(2, 0, false)))

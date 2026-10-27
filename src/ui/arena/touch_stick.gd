@@ -3,8 +3,8 @@ extends Control
 ## The floating move stick (docs/DESIGN.md F.8). A finger that lands in the arena during a wave becomes its
 ## centre; dragging away from it moves the player. Only that finger drives it until it lifts. Draws itself.
 
-const RADIUS: float = 70.0                # a drag this far from the centre is full speed
-const KNOB_RADIUS: float = 26.0
+const RADIUS: float = 120.0                # a drag this far from the centre is full speed
+const KNOB_RADIUS: float = 52.0
 
 var touch_index: int = -1                 # the finger driving the stick, or -1
 var origin: Vector2 = Vector2.ZERO
@@ -15,8 +15,8 @@ func _draw() -> void:
 	if not is_active():
 		return
 	draw_circle(origin, RADIUS, Color(UiColors.PANEL_BG, 0.35))
-	draw_arc(origin, RADIUS, 0.0, TAU, 48, Color(UiColors.TEXT, 0.4), 2.0)
-	draw_circle(knob, KNOB_RADIUS, Color(UiColors.ACCENT, 0.6))
+	draw_arc(origin, RADIUS, 0.0, TAU, 48, Color(UiColors.TEXT, 0.5), 5.0)
+	draw_circle(knob, KNOB_RADIUS, Color(UiColors.HAZARD, 0.75))
 
 
 func is_active() -> bool:

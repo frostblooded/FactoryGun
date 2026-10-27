@@ -1,12 +1,11 @@
 class_name Main
 extends Control
-## The game's root (docs/DESIGN.md G.3): the factory panel on the left, the arena on the right and the
-## overlays over the arena. Views only ask: Main turns each request into a RunState call, and _sync()
-## brings every view in line with the run's state.
+## The game's root (docs/DESIGN.md G.3). Mobile first: each phase owns the whole screen. The factory panel shows
+## in the build phase, the arena during a wave, and the reward and game-over overlays over the arena. Views only
+## ask: Main turns each request into a RunState call, and _sync() brings every view in line with the run's state.
+## Every child fills Main, which fills the window (the stretch aspect is "expand": a wide phone gets a wider screen).
 
-const PANEL_RECT: Rect2 = Rect2(0, 0, 600, 900)
-const ARENA_RECT: Rect2 = Rect2(600, 0, 1000, 900)
-const SCREEN_RECT: Rect2 = Rect2(0, 0, 1600, 900)
+const MIN_SIZE: Vector2 = Vector2(1600, 900)   # the project's base size: "expand" never makes the screen smaller
 
 var run: RunState = RunState.new(randi())   # randi() is allowed outside core/sim
 var panel: FactoryPanel = FactoryPanel.new()
@@ -19,11 +18,10 @@ var rotate_hint: RotateHint = RotateHint.new()
 func _ready() -> void:
 	InputSetup.ensure_actions()
 	theme = FactoryTheme.build()
-	_add(panel, PANEL_RECT)
-	_add(arena, ARENA_RECT)
-	_add(reward_overlay, ARENA_RECT)        # overlays after the arena: drawn on top
-	_add(game_over_overlay, ARENA_RECT)
-	_add(rotate_hint, SCREEN_RECT)          # last: over everything
+	custom_minimum_size = MIN_SIZE
+	for c: Control in [panel, arena, reward_overlay, game_over_overlay, rotate_hint]:   # back to front
+		add_child(c)
+		c.set_anchors_and_offsets_preset(PRESET_FULL_RECT)
 	panel.bind(run.graph, run.inventory)
 	run.plan_changed.connect(_on_plan_changed)
 	run.flow.state_changed.connect(_on_state_changed)
@@ -55,13 +53,6 @@ func _unhandled_input(event: InputEvent) -> void:
 				reward_overlay.choose(i)
 
 
-## Default anchors, so setting the size does not warn (A.4.5).
-func _add(c: Control, rect: Rect2) -> void:
-	add_child(c)
-	c.position = rect.position
-	c.size = rect.size
-
-
 func _report(code: GraphError.Code) -> void:
 	if code != GraphError.Code.OK:
 		panel.show_message(GraphError.describe(code), true)
@@ -74,6 +65,8 @@ func _try_start_wave() -> void:
 
 func _sync(state: GameFlow.State) -> void:
 	var wave: int = run.flow.wave
+	panel.visible = state == GameFlow.State.BUILD
+	arena.visible = state != GameFlow.State.BUILD
 	reward_overlay.visible = state == GameFlow.State.REWARD
 	game_over_overlay.visible = state == GameFlow.State.GAME_OVER
 	match state:
@@ -91,6 +84,7 @@ func _sync(state: GameFlow.State) -> void:
 			panel.set_locked(true, "GAME OVER")   # the arena stays frozen on its last frame
 			game_over_overlay.show_result(wave - 1, run.total_kills)
 	panel.set_plan(run.plan)
+	panel.set_hp(run.player_hp)
 	panel.set_start_state(wave, run.can_start_wave(), run.start_reason())
 
 

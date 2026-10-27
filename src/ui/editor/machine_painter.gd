@@ -25,7 +25,7 @@ static func draw_machine(ci: CanvasItem, kind: StringName, rect: Rect2, id: int,
 	if not (still and animates(kind)):
 		draw_machine_icon(ci, kind, rect, alpha, t)
 	ci.draw_string(font, Vector2(rect.position.x, rect.end.y - 10), def.short_name, HORIZONTAL_ALIGNMENT_CENTER,
-			rect.size.x, 11, _a(UiColors.TEXT, alpha))
+			rect.size.x, 13, _a(UiColors.TEXT, alpha))
 	ci.draw_circle(Vector2(body.end.x - 14, body.position.y + 17), 4.0, _a(lamp_color(status), alpha))
 	if def.removable and id > 0:
 		var plate: String = "#%d" % id

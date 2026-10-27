@@ -27,3 +27,7 @@ const HAZARD: Color = Color("f2c230")
 const ARENA_FLOOR: Color = Color("1b1d20")
 const ARENA_GRID: Color = Color("23262a")
 const PLAYER: Color = Color("5da9e9")
+const INK: Color = Color("17181a")                # dark text on the bright arcade buttons
+const BUTTON_LIP: Color = Color("a8741c")         # the thick bottom edge that makes the Start button look pressable
+const TILE_BG: Color = Color("33373b")
+const TILE_LIP: Color = Color("1c1e20")

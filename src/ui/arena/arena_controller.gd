@@ -1,9 +1,12 @@
 class_name ArenaController
 extends Control
-## Glue between engine input, the pure ArenaWorld and the views.
+## Glue between engine input, the pure ArenaWorld and the views. It fills the screen: the arena is scaled to fit
+## the middle, with the HUD on the wings either side, and a finger anywhere drives the move stick.
 
 signal wave_cleared(hp_left: float, kills: int)
 signal player_died(kills: int)
+
+const WING_MIN: float = 260.0             # each side keeps at least this much for the HUD
 
 var world: ArenaWorld = ArenaWorld.new()
 var view: ArenaView                       # child, mouse IGNORE, view.world = world
@@ -19,11 +22,23 @@ func _init() -> void:
 	view.world = world
 	hud = Hud.new()
 	stick = TouchStick.new()
+	view.size = SimTuning.ARENA_SIZE      # placed and scaled by _layout()
 	# Full-rect children follow this control's size; setting their size would warn (A.4.5).
 	for child: Control in [view, hud, stick]:
 		child.mouse_filter = MOUSE_FILTER_IGNORE
-		child.set_anchors_preset(PRESET_FULL_RECT)
+		if child != view:
+			child.set_anchors_preset(PRESET_FULL_RECT)
 		add_child(child)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED and view != null:
+		_layout()
+
+
+## The wings' backdrop, under the children.
+func _draw() -> void:
+	draw_rect(Rect2(Vector2.ZERO, size), UiColors.PANEL_BG)
 
 
 func _physics_process(delta: float) -> void:
@@ -61,8 +76,29 @@ func go_idle(hp: float, next_wave: int) -> void:
 	hud.set_stats(hp, 0)
 
 
+## Controller-local: where the arena is drawn.
+func arena_rect() -> Rect2:
+	var s: float = arena_scale()
+	var drawn: Vector2 = SimTuning.ARENA_SIZE * s
+	return Rect2(((size - drawn) / 2.0).round(), drawn)
+
+
+## As big as fits the height, leaving WING_MIN either side.
+func arena_scale() -> float:
+	var arena: Vector2 = SimTuning.ARENA_SIZE
+	return maxf(minf(size.y / arena.y, (size.x - 2.0 * WING_MIN) / arena.x), 0.1)
+
+
 func is_running() -> bool:
 	return world.is_running()
+
+
+func _layout() -> void:
+	var r: Rect2 = arena_rect()
+	view.position = r.position
+	view.scale = Vector2.ONE * arena_scale()
+	hud.arena = r
+	hud.queue_redraw()
 
 
 func step(delta: float) -> void:

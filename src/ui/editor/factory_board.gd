@@ -18,12 +18,12 @@ signal refused(reason: String)
 const DRAG_TYPE: String = "factorygun.machine"
 const BELT_SPEED_BUILD: float = 40.0
 const BELT_SPEED_PLAY: float = 100.0
-const REASON_FONT_SIZE: int = 12
+const REASON_FONT_SIZE: int = 16
 const HAZARD_BAND: float = 14.0
 const CURSOR_GAP: float = 14.0            # the refusal box keeps this far from the cursor...
 const PREVIEW_GAP: float = 44.0           # ...and from a palette drag's 80x80 preview, centred on the cursor
-const CUT_SIZE: Vector2 = Vector2(64, 30)
-const CUT_OFFSET: Vector2 = Vector2(-32, -48)   # the Cut button's top-left from the tap: centred above the finger
+const CUT_SIZE: Vector2 = Vector2(96, 48)
+const CUT_OFFSET: Vector2 = Vector2(-48, -76)   # the Cut button's top-left from the tap: centred above the finger
 
 var interaction: BoardInteraction = BoardInteraction.new()
 var cut_button: Button = Button.new()     # shown over a tapped belt; cuts it
@@ -33,6 +33,7 @@ var _scroll: float = 0.0                  # how far live belts have moved, px
 var _icon_time: float = 0.0
 var _drop: DropPreview = null             # the palette drag hovering the board, drawn as a ghost
 var _drop_at: Vector2 = Vector2.ZERO
+var _armed: DropPreview = null            # the tap-to-place ghost (BoardInteraction.armed_preview)
 var _belt_layer: Control = Control.new()      # belt beds and the still chevrons of dead belts
 var _flow_layer: Control = Control.new()      # the moving chevrons and items of live belts, every frame
 var _machine_layer: Control = Control.new()   # machines without their animated icons, then the belt couplers
@@ -58,6 +59,7 @@ func _init() -> void:
 		layer.show_behind_parent = layer != _lock_layer   # all but the lock go under this board's own drawing
 		add_child(layer)
 	cut_button.text = "CUT"
+	cut_button.add_theme_font_size_override("font_size", 22)
 	cut_button.size = CUT_SIZE
 	cut_button.focus_mode = Control.FOCUS_NONE
 	cut_button.visible = false
@@ -78,6 +80,7 @@ func _process(delta: float) -> void:
 	if _drop != null and (not get_viewport().gui_is_dragging()
 			or not Rect2(Vector2.ZERO, size).has_point(get_local_mouse_position())):
 		_drop = null
+	_armed = interaction.armed_preview()
 	if _look() != _static_look:
 		_redraw_static()
 	cut_button.visible = interaction.selected != null and not interaction.locked
@@ -150,6 +153,12 @@ func set_locked(locked: bool, text: String) -> void:
 	if locked and is_inside_tree() and get_viewport().gui_is_dragging():
 		get_viewport().gui_cancel_drag()
 	_lock_layer.queue_redraw()
+	queue_redraw()
+
+
+## A palette tap: the next floor tap places kind; &"" puts it back.
+func arm(kind: StringName) -> void:
+	interaction.arm(kind)
 	queue_redraw()
 
 
@@ -235,7 +244,8 @@ func _redraw_static() -> void:
 ## What the machine and belt layers show besides the graph and the plan: the dragged machine and the lit belts.
 func _look() -> String:
 	var hovered: String = interaction.hover.wire.key() if interaction.hover.type == BoardHit.Type.BELT else ""
-	var splice: String = _drop.splice.key() if _drop != null and _drop.splice != null else ""
+	var preview: DropPreview = _preview()
+	var splice: String = preview.splice.key() if preview != null and preview.splice != null else ""
 	var picked: String = interaction.selected.key() if interaction.selected != null else ""
 	return "%d %s %s %s" % [_dragged(), hovered, splice, picked]
 
@@ -246,9 +256,15 @@ func _dragged() -> int:
 
 ## The hovered belt, the selected belt and the belt a palette drag would splice into are drawn brightened.
 func _is_lit(w: Wire) -> bool:
+	var preview: DropPreview = _preview()
 	return (interaction.hover.type == BoardHit.Type.BELT and interaction.hover.wire.same_as(w)) \
 			or (interaction.selected != null and interaction.selected.same_as(w)) \
-			or (_drop != null and _drop.splice != null and _drop.splice.same_as(w))
+			or (preview != null and preview.splice != null and preview.splice.same_as(w))
+
+
+## The ghost to show: a palette drag over the board, else the armed machine under the finger or mouse.
+func _preview() -> DropPreview:
+	return _drop if _drop != null else _armed
 
 
 ## The couplers go over the machines: a coupler marks every wired port, and is all a zero-length belt between
@@ -299,8 +315,8 @@ func _draw_gesture() -> void:
 				if graph.def_of(interaction.drag_id).removable:   # the Source and Output get the refusal box instead
 					var label: Rect2 = _release_label(old)
 					draw_rect(label, Color(UiColors.PANEL_BG, 0.92))
-					draw_string(get_theme_default_font(), label.position + Vector2(0, 13), "RELEASE TO REMOVE",
-							HORIZONTAL_ALIGNMENT_CENTER, label.size.x, 11, UiColors.ERROR)
+					draw_string(get_theme_default_font(), label.position + Vector2(0, 19), "RELEASE TO REMOVE",
+							HORIZONTAL_ALIGNMENT_CENTER, label.size.x, 15, UiColors.ERROR)
 			else:
 				_draw_ghost(graph.kind_of(interaction.drag_id), interaction.ghost_cell(), interaction.ghost_valid())
 		BoardInteraction.Mode.DRAG_WIRE:
@@ -314,17 +330,20 @@ func _draw_gesture() -> void:
 	if _drop != null:
 		_draw_ghost(_drop.kind, _drop.cell, _drop.valid)
 		_draw_reason(_drop.reason, _drop_at, PREVIEW_GAP)
+	elif _armed != null:
+		_draw_ghost(_armed.kind, _armed.cell, _armed.valid)
+		_draw_reason(_armed.reason, interaction.cursor, PREVIEW_GAP)
 
 
 func _draw_ghost(kind: StringName, cell: Vector2i, valid: bool) -> void:
 	var rect: Rect2 = BoardLayout.machine_rect_at(cell)
 	MachinePainter.draw_machine(self, kind, rect, -1, ShotPlan.MachineStatus.IDLE, 0.6, _icon_time)
-	draw_rect(rect.grow(-1.0), UiColors.OK if valid else UiColors.ERROR, false, 2.0)
+	draw_rect(rect.grow(-1.0), UiColors.OK if valid else UiColors.ERROR, false, 3.0)
 
 
 ## The "RELEASE TO REMOVE" label, centred on the machine and kept inside the board.
 func _release_label(machine: Rect2) -> Rect2:
-	return _inside(Rect2(machine.get_center() - Vector2(60, 9), Vector2(120, 18)))
+	return _inside(Rect2(machine.get_center() - Vector2(80, 13), Vector2(160, 26)))
 
 
 ## The refusal box next to the cursor, kept inside the board.
@@ -368,4 +387,4 @@ func _draw_lock() -> void:
 					Vector2(x + 2 * HAZARD_BAND, top), Vector2(x + HAZARD_BAND, top + HAZARD_BAND)]), UiColors.HAZARD)
 			x += 2 * HAZARD_BAND
 	_lock_layer.draw_string(get_theme_default_font(), Vector2(0, size.y / 2 + 7), _lock_text, HORIZONTAL_ALIGNMENT_CENTER,
-			size.x, 20, UiColors.HAZARD)
+			size.x, 28, UiColors.HAZARD)

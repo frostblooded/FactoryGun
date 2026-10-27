@@ -15,14 +15,16 @@ L Risks and pitfalls.
 
 ## 0. Overview
 
-FactoryGun splits the screen in two:
+FactoryGun is played mostly on phones, in a browser, held sideways. Each phase owns the whole screen
+(mobile-first redesign, 2026-10; see E.1 and G.3), in a chunky arcade style with big buttons:
 
-- **Left (600 px): the factory.** This is a blueprint editor in a Factorio style: dark industrial floor
-  tiles and machines that snap to a grid.
-  - Drag machines from the palette onto the floor.
+- **Build screen: the factory.** This is a blueprint editor in a Factorio style: dark industrial floor
+  tiles and machines that snap to a grid, scaled up to fill the middle of the screen.
+  - Tap a machine tile, then tap the floor to place it (or drag the tile onto the floor).
   - Drag belts from output ports to input ports.
   - The factory defines what the gun fires.
-- **Right (1000 px): the arena.** This is a top-down shooter.
+- **Fight screen: the arena.** This is a top-down shooter, scaled to the screen's height, with the HUD on
+  the wings either side.
   - WASD (or the touch stick) moves; the gun aims at the nearest enemy and fires on its own (F.8).
   - Enemies come in waves.
   - Bullet effects visibly apply on every hit.
@@ -226,7 +228,7 @@ gdscript/warnings/untyped_declaration=2
 window/size/viewport_width=1600
 window/size/viewport_height=900
 window/stretch/mode="canvas_items"
-window/stretch/aspect="keep"
+window/stretch/aspect="expand"
 
 [rendering]
 
@@ -1104,24 +1106,34 @@ Every overlay (flames, ring, dots) is still drawn.
 
 ## E. Editor UI (left panel)
 
-### E.1 Layout
+### E.1 Layout (mobile first)
 
-All coordinates are absolute, inside the 600×900 panel at screen (0,0). There are no containers, so
-tests can compute positions.
+The build screen fills the window. `FactoryPanel._layout()` places every child from the panel's size, with
+no containers, so tests can compute positions. The project's stretch aspect is `expand`, so the screen is
+never smaller than 1600×900 and a wide phone gets a wider one. At 1600×900:
 
 | Element | Rect (x, y, w, h) | Content |
 |---|---|---|
-| Panel background | 0, 0, 600, 900 | `Panel` with the theme's PANEL_BG and PANEL_EDGE style box |
-| Title | 20, 12, 160, 44 | Label "FACTORY", size 20, ACCENT |
-| Trash bin | 196, 16, 150, 36 | `TrashBin` (E.10) |
-| Start button | 360, 18, 220, 32 | "START WAVE %d  [Space]"; disabled unless BUILD with a valid plan |
-| Board | 20, 64, 560, 480 | `FactoryBoard` (14×12 tiles of 40 px) |
-| Status line | 20, 552, 560, 22 | Label, size 12 (E.8) |
-| Palette | slot i at (20 + 78·i, 582), 72×88 | 7 `PaletteSlot`s in `PALETTE_ORDER` |
-| Readout | 20, 678, 560, 214 | `ShotReadout` (E.7); bottom edge at y 892 |
+| Panel background | 0, 0, W, H | `Panel` with the theme's PANEL_BG and PANEL_EDGE style box |
+| Title | 20, 8, 400, 80 | Label "FACTORY", size 48, ACCENT |
+| Next wave | centred, baseline 62 | "NEXT: WAVE %d", size 36 (drawn by the panel) |
+| HP bar | W − 360, 24, 340, 48 | Rounded bar, OK or ERROR below `Hud.LOW_HP`, "HP %d" in INK |
+| Palette | tile i at (20 + 154·(i % 2), 108 + 184·(i / 2)), 142×172 | 7 `PaletteSlot`s in `PALETTE_ORDER`, two columns down the left |
+| Trash bin | 174, 660, 142, 172 | `TrashBin` (E.10), the palette's 8th tile |
+| Board | centred in the room between the palette and the right column | `FactoryBoard` (14×12 tiles of 40 px), `scale` = the largest that fits (1.579 at 1600×900, 1.608 at 1950×900) |
+| Readout | W − 360, 108, 340, 440 | `ShotReadout` (E.7) |
+| Status text | W − 356, 560, 332, 138 | Label, size 22, word-wrapped (E.8) |
+| Start button | W − 360, H − 190, 340, 170 | "START WAVE %d", theme variation `BigButton` (yellow, size 44); disabled unless BUILD with a valid plan |
 
-`FactoryPanel` constants: `BOARD_POS = Vector2(20, 64)`, `TRASH_POS = Vector2(196, 16)`, `PALETTE_POS = Vector2(20, 582)`,
-`SLOT_STEP = 78.0`, `READOUT_POS = Vector2(20, 678)`.
+The board keeps its own 560×480 board-local geometry (E.3); only its `scale` changes, and Godot maps input
+and drops into board-local coordinates. Port, belt and magnet hit sizes are fingertip sized (E.3).
+
+Tap-to-place: tapping a palette tile arms its kind (`FactoryBoard.arm`, `BoardInteraction.armed`), and lights
+the tile. A press on free floor or a belt then enters `Mode.PLACE`: the armed machine's ghost follows the
+finger, and the release places it there like a palette drop (splicing into a belt within `SPLICE`). The kind
+stays armed until its count reaches 0, its tile is tapped again, a machine or port is pressed, Escape, or a
+lock. A mouse hovering free floor also shows the armed ghost. Tapping a tile with none left, or one never
+found, says so on the status text.
 
 ### E.2 Board rendering (Factorio look)
 
@@ -1614,8 +1626,9 @@ The bin, in the title row at `TRASH_POS`, makes that drop visible to mouse and t
 
 ### F.1 World and numbers (`SimTuning`, WP2)
 
-The arena is 1000×900. World coordinates equal the local pixel coordinates of the arena control (screen
-x 600–1600).
+The arena is 1000×900. World coordinates equal the local pixel coordinates of `ArenaView`, which the
+full-screen `ArenaController` centres and scales to the screen's height, keeping at least `WING_MIN` (260)
+either side for the HUD (`arena_rect()`, `arena_scale()`; 1.0 at 1600×900, the view at x 300).
 
 ```gdscript
 class_name SimTuning
@@ -1841,7 +1854,10 @@ func _read_intent() -> PlayerIntent:
 Transient FX (rings, bursts, muzzle flashes, hit flashes by enemy id, the edge flash) are created from
 SimEvents and aged in `_process`. They are purely visual and not part of the sim state.
 
-`Hud` draws a top bar, 1000×36, PANEL_BG at 85% alpha:
+Mobile-first redesign: `Hud` is full screen and draws on the wings either side of the arena instead of
+the top bar below: WAVE and a big number, and a 64 px HP bar, on the left; ENEMIES and a big number (READY
+between waves), and a "DRAG ANYWHERE TO MOVE" hint, on the right. The banner is size 96, centred on the
+arena. There is no idle hint: the arena is hidden between waves. The original top bar was:
 
 - **Left:** `"WAVE %d"` (size 18).
 - **Centre:** an HP bar (240×14 at x 380). The fill is OK, or ERROR below 30 HP. Next to it: `"HP %d"`.
@@ -1901,9 +1917,7 @@ BUILD --start_wave()--> PLAY --complete_wave()--> REWARD --choose_offer(i)--> BU
 class_name Main
 extends Control
 
-const PANEL_RECT: Rect2 = Rect2(0, 0, 600, 900)
-const ARENA_RECT: Rect2 = Rect2(600, 0, 1000, 900)
-const SCREEN_RECT: Rect2 = Rect2(0, 0, 1600, 900)
+const MIN_SIZE: Vector2 = Vector2(1600, 900)   # custom_minimum_size; "expand" never makes the screen smaller
 
 var run: RunState = RunState.new(randi())   # randi() is allowed outside core/sim
 var panel: FactoryPanel = FactoryPanel.new()
@@ -1916,11 +1930,10 @@ var rotate_hint: RotateHint = RotateHint.new()
 func _ready() -> void:
 	InputSetup.ensure_actions()
 	theme = FactoryTheme.build()
-	_add(panel, PANEL_RECT)
-	_add(arena, ARENA_RECT)
-	_add(reward_overlay, ARENA_RECT)        # overlays after the arena: drawn on top
-	_add(game_over_overlay, ARENA_RECT)
-	_add(rotate_hint, SCREEN_RECT)          # last: over everything
+	custom_minimum_size = MIN_SIZE
+	for c: Control in [panel, arena, reward_overlay, game_over_overlay, rotate_hint]:   # back to front
+		add_child(c)
+		c.set_anchors_and_offsets_preset(PRESET_FULL_RECT)
 	panel.bind(run.graph, run.inventory)
 	run.plan_changed.connect(_on_plan_changed)
 	run.flow.state_changed.connect(_on_state_changed)
@@ -1958,6 +1971,8 @@ func _on_state_changed(_previous: GameFlow.State, current: GameFlow.State) -> vo
 
 func _sync(state: GameFlow.State) -> void:
 	var wave: int = run.flow.wave
+	panel.visible = state == GameFlow.State.BUILD
+	arena.visible = state != GameFlow.State.BUILD
 	reward_overlay.visible = state == GameFlow.State.REWARD
 	game_over_overlay.visible = state == GameFlow.State.GAME_OVER
 	match state:
@@ -1993,9 +2008,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				reward_overlay.choose(i)
 ```
 
-`_add(c, rect)` does `add_child(c)`, then sets `c.position` and `c.size`. The five controls keep their
-default anchors, so setting `size` does not warn (A.4.5). All connections go to methods, and Main is a
-Node, so there are no reference cycles.
+Every child fills Main, and Main fills the window: each phase owns the whole screen. The build screen
+(the panel) shows only in BUILD; the arena shows in PLAY, and stays behind the reward and game-over
+overlays. `_sync` also passes the run's HP to the panel's top bar (`set_hp`).
 
 ### G.4 Overlays (WP4)
 
