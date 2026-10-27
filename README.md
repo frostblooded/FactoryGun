@@ -2,13 +2,13 @@
 
 A top-down shooter where you build your gun as a small factory.
 
-The screen has two halves:
+It is made for phones held sideways, in the browser: each phase fills the whole screen, with big buttons.
 
-- **Left: the factory.** A Factorio-style floor. Drag machines onto it and connect them with belts. Every
+- **Build screen: the factory.** A Factorio-style floor. Place machines on it and connect them with belts. Every
   route from the Basic Bullet to the Output is one bullet of each shot (8 at most), and the machines on
   that route change it: Fire burns, Ice slows, Poison stacks, Speed Up and Size Up boost the bullet,
   Pierce passes through enemies, and a Splitter forks the stream into a fan of bullets.
-- **Right: the arena.** Endless waves of enemies. Your gun fires whatever the factory builds, and every
+- **Fight screen: the arena.** Endless waves of enemies. Your gun fires whatever the factory builds, and every
   effect shows on the enemies it hits.
 
 Each round: build, press Start Wave, survive. Clear a wave to pick 1 of 3 new machines and heal 25 HP,
@@ -18,7 +18,7 @@ then build again. If you die, the run is over: restart and try a different facto
 
 | Action | Input |
 |---|---|
-| Place a machine | Drag it from the palette onto the floor. Drop it on a belt to splice it in. |
+| Place a machine | Tap its tile, then tap the floor (tap the tile again to put it back). Or drag the tile onto the floor. Place it on a belt to splice it in. |
 | Move a machine | Drag it to another spot. Its belts follow. |
 | Remove a machine (refund) | Drag it onto the REMOVE bin (or anywhere off the floor), right-click it, or hover it and press Delete or X. |
 | Connect a belt | Drag from an output port (right edge) to an input port (left edge). Dragging from an output port that already has a belt re-routes it. |
@@ -28,12 +28,12 @@ then build again. If you die, the run is over: restart and try a different facto
 | Move | W A S D or the arrow keys. On a touch screen, put a finger anywhere in the arena and drag: a stick appears under it. |
 | Aim and fire | Automatic: the gun aims at the nearest enemy and fires on its own. |
 | Pick a reward | 1, 2 or 3, or click or tap a card. |
-| Restart after game over | R, or the RESTART button. |
+| Restart after game over | R, or the PLAY AGAIN button. |
 
 On a phone, play in landscape: holding it upright pauses the game behind a "rotate your phone" notice.
 
-The factory is locked while a wave is running. The readout under the palette shows what one trigger
-pull fires.
+The factory is locked while a wave is running. The readout above the START WAVE button shows what one
+trigger pull fires.
 
 ## Running
 

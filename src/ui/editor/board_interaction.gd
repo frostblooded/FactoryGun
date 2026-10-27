@@ -2,8 +2,10 @@ class_name BoardInteraction
 extends RefCounted
 ## The board's pointer state machine (docs/DESIGN.md E.4). Takes board-local positions and returns
 ## BoardActions. It reads the graph and the inventory and never mutates them.
+## Tap-to-place: arm() picks a machine kind up (a palette tap); a press on the floor or a belt then shows its ghost
+## under the finger, and the release places it there (PLACE mode).
 
-enum Mode { IDLE, PRESS_MACHINE, DRAG_MACHINE, DRAG_WIRE }
+enum Mode { IDLE, PRESS_MACHINE, DRAG_MACHINE, DRAG_WIRE, PLACE }
 
 var mode: Mode = Mode.IDLE
 var locked: bool = false
@@ -18,6 +20,7 @@ var wire_target: PortRef = null           # magnet-snapped input port, or null
 var wire_code: GraphError.Code = GraphError.Code.OK
 var selected: Wire = null                 # the tapped belt the Cut button cuts, or null
 var selected_at: Vector2 = Vector2.ZERO   # where it was tapped
+var armed: StringName = &""               # the kind a floor tap places, or &""
 var _press_at: Vector2 = Vector2.ZERO
 
 
@@ -37,6 +40,14 @@ func set_locked(value: bool) -> void:
 func cancel() -> void:
 	_end_gesture()
 	selected = null
+	armed = &""
+	refresh_hover()
+
+
+## &"" disarms.
+func arm(kind: StringName) -> void:
+	armed = kind
+	selected = null
 	refresh_hover()
 
 
@@ -55,6 +66,10 @@ func press(p: Vector2, button: MouseButton) -> BoardAction:
 	_end_gesture()
 	selected = null                       # any left press drops the selection; a belt tap makes a new one
 	_press_at = p
+	if armed != &"" and (hit.type == BoardHit.Type.EMPTY or hit.type == BoardHit.Type.BELT):
+		mode = Mode.PLACE
+		return BoardAction.none()
+	armed = &""                           # pressing a machine or a port puts the picked-up machine back
 	if hit.type == BoardHit.Type.BELT:
 		_select(hit.wire, p)
 	elif hit.type == BoardHit.Type.PORT and hit.port.is_output:
@@ -85,6 +100,10 @@ func release(p: Vector2) -> BoardAction:
 	cursor = p
 	if mode == Mode.DRAG_WIRE:
 		_aim_wire()
+	if mode == Mode.PLACE:
+		var placed: BoardAction = drop(armed, p) if BoardLayout.bounds().has_point(p) else BoardAction.none()
+		_end_gesture()
+		return placed
 	var refusal: String = refusal_text()
 	var action: BoardAction = BoardAction.none(refusal)
 	if refusal == "" and mode == Mode.DRAG_MACHINE:
@@ -165,6 +184,15 @@ func drop_preview(kind: StringName, p: Vector2) -> DropPreview:
 		else:
 			code = graph.can_add_machine(kind, cell)
 	return DropPreview.make(kind, cell, code == GraphError.Code.OK, splice, GraphError.describe(code))
+
+
+## The armed machine's ghost while a floor press is held, or while the mouse hovers free floor; else null.
+func armed_preview() -> DropPreview:
+	if armed == &"" or locked or not BoardLayout.bounds().has_point(cursor):
+		return null
+	if mode == Mode.PLACE or (mode == Mode.IDLE and (hover.type == BoardHit.Type.EMPTY or hover.type == BoardHit.Type.BELT)):
+		return drop_preview(armed, cursor)
+	return null
 
 
 func drop(kind: StringName, p: Vector2) -> BoardAction:

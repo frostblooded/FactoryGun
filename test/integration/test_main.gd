@@ -6,9 +6,6 @@ const MainScene = preload("res://src/main/main.tscn")
 
 const SEED: int = 4242
 const STEP: float = SimTuning.STEP
-const BOARD: Vector2 = FactoryPanel.BOARD_POS   # the panel sits at (0, 0), so board-local + BOARD = screen
-const SLOT_FIRE: Vector2 = Vector2(56, 626)     # palette slot centres: PALETTE_POS + (36 + 78 * i, 44)
-const SLOT_SPEED: Vector2 = Vector2(290, 626)
 const NO_PATH: String = "Connect the Basic Bullet to the Output first."
 
 
@@ -17,11 +14,13 @@ func test_boot_layout_and_initial_state() -> void:
 	var run: RunState = main.run
 	assert_eq(main.get_child_count(), 5)
 	var order: Array[Control] = [main.panel, main.arena, main.reward_overlay, main.game_over_overlay, main.rotate_hint]
-	var rects: Array[Rect2] = [Main.PANEL_RECT, Main.ARENA_RECT, Main.ARENA_RECT, Main.ARENA_RECT, Main.SCREEN_RECT]
+	assert_eq(main.size, Main.MIN_SIZE)
 	for i: int in order.size():               # the overlays come after the arena, so they draw on top
 		assert_same(main.get_child(i), order[i])
-		assert_eq(Rect2(order[i].position, order[i].size), rects[i])
+		assert_eq(Rect2(order[i].position, order[i].size), Rect2(Vector2.ZERO, Main.MIN_SIZE), "each fills the screen")
 	assert_eq(main.theme.default_font_size, FactoryTheme.FONT_SIZE)
+	assert_true(main.panel.visible, "the build phase owns the screen")
+	assert_false(main.arena.visible)
 	assert_eq([run.flow.state, run.flow.wave, run.total_kills], [GameFlow.State.BUILD, 1, 0])
 	assert_almost_eq(run.player_hp, Tuning.PLAYER_MAX_HP, 1e-4)
 	assert_eq(run.inventory.to_dict(), Inventory.from_counts(Tuning.START_INVENTORY).to_dict())
@@ -30,7 +29,7 @@ func test_boot_layout_and_initial_state() -> void:
 	assert_same(board.interaction.graph, run.graph)
 	assert_same(board.interaction.inventory, run.inventory)
 	assert_false(board.interaction.locked)
-	assert_eq(main.panel.start_button.text, "START WAVE 1  [Space]")
+	assert_eq(main.panel.start_button.text, "START WAVE 1")
 	assert_false(main.panel.start_button.disabled)
 	assert_eq([main.panel.slots[0].count, main.panel.slots[3].count], [1, 1])   # Fire, Speed Up
 	assert_eq(main.panel.readout.label.text, "1 bullet/shot · 4 shots/s · 10.0 dmg/shot\n#1 DMG 10.0 · SPD 600 · SIZE 5.0")
@@ -41,8 +40,9 @@ func test_boot_layout_and_initial_state() -> void:
 	assert_false(main.rotate_hint.visible, "headless has no touch screen")
 	assert_false(main.game_over_overlay.visible)
 	await wait_process_frames(2)
-	assert_eq(main.arena.view.size, Vector2(1000, 900))   # full-rect children follow the arena's size
-	assert_eq(main.arena.hud.size, Vector2(1000, 900))
+	assert_eq(main.arena.view.size, SimTuning.ARENA_SIZE)   # scaled to fit, between the HUD's wings
+	assert_eq(main.arena.view.position, Vector2(300, 0))
+	assert_eq(main.arena.hud.size, Main.MIN_SIZE)           # full-rect children follow the arena's size
 
 
 ## Each draw_circle is a draw call of its own, where rects batch: the floor's 336 bolts as circles took Main idle on
@@ -94,6 +94,8 @@ func test_space_starts_wave_and_locks_editor() -> void:
 	var before: Dictionary = run.graph.to_dict()
 	_key(main, KEY_SPACE)
 	assert_eq(run.flow.state, GameFlow.State.PLAY)
+	assert_false(main.panel.visible, "the fight owns the screen")
+	assert_true(main.arena.visible)
 	assert_same(run.active_plan, run.plan)
 	assert_true(main.arena.is_running())
 	assert_same(main.arena.world.plan, run.active_plan)
@@ -159,10 +161,11 @@ func test_leaving_the_board_drops_the_hover() -> void:
 	var run: RunState = main.run
 	var board: FactoryBoard = main.panel.board
 	board.place_requested.emit(MachineCatalog.FIRE, Vector2i(5, 1), null)
-	Mouse.move(BOARD + Vector2(240, 80), BOARD + Vector2(240, 80), 0)   # onto Fire #3
+	var fire: Vector2 = Mouse.on_board(board, Vector2(240, 80))
+	Mouse.move(fire, fire, 0)                                           # onto Fire #3
 	await wait_process_frames(1)
 	assert_true(board.interaction.hover.same_as(BoardHit.make(BoardHit.Type.MACHINE, 3)))
-	Mouse.move(Vector2(700, 450), BOARD + Vector2(240, 80), 0)          # over the arena in one motion
+	Mouse.move(Vector2(1400, 600), fire, 0)                             # off the board in one motion
 	await wait_process_frames(1)
 	assert_eq(board.interaction.hover.type, BoardHit.Type.EMPTY)
 	_key(main, KEY_X)
@@ -205,6 +208,8 @@ func test_full_loop_build_play_reward_build() -> void:
 		kinds.append(offer.kind)
 	assert_has(kinds, MachineCatalog.SPLITTER)
 	assert_true(main.reward_overlay.visible)
+	assert_true(main.arena.visible, "the reward is picked over the arena")
+	assert_false(main.panel.visible)
 	assert_false(main.game_over_overlay.visible)
 	assert_eq(main.reward_overlay.offers, run.offers)
 	assert_false(main.arena.is_running())
@@ -230,8 +235,11 @@ func test_full_loop_build_play_reward_build() -> void:
 	assert_eq([main.arena.hud.wave, main.arena.hud.running], [2, false])
 	assert_false(main.arena.is_running())
 	assert_false(main.reward_overlay.visible)
+	assert_true(main.panel.visible, "back to the build screen")
+	assert_false(main.arena.visible)
+	assert_almost_eq(main.panel._hp, run.player_hp, 1e-4)
 	assert_false(main.panel.board.interaction.locked)
-	assert_eq(main.panel.start_button.text, "START WAVE 2  [Space]")
+	assert_eq(main.panel.start_button.text, "START WAVE 2")
 	assert_false(main.panel.start_button.disabled)
 	var stock: Dictionary = run.inventory.to_dict()
 	_key(main, KEY_2)                         # no reward is up any more
@@ -285,7 +293,7 @@ func test_death_then_restart() -> void:
 	assert_almost_eq(run.player_hp, Tuning.PLAYER_MAX_HP, 1e-4)
 	assert_false(main.game_over_overlay.visible)
 	assert_false(main.panel.board.interaction.locked)
-	assert_eq(main.panel.start_button.text, "START WAVE 1  [Space]")
+	assert_eq(main.panel.start_button.text, "START WAVE 1")
 	assert_false(main.panel.start_button.disabled)
 	assert_false(main.arena.is_running())
 	assert_true(world.enemies.is_empty())
@@ -304,30 +312,37 @@ func test_real_mouse_builds_and_wires_a_burning_gun() -> void:
 	await Mouse.prepare(self)
 	var main: Main = _main()
 	var run: RunState = main.run
-	await Mouse.drag(self, SLOT_FIRE, BOARD + Vector2(280, 244))       # onto the default belt: a splice
+	var board: FactoryBoard = main.panel.board
+	var at: Callable = func(local: Vector2) -> Vector2: return Mouse.on_board(board, local)
+	await Mouse.drag(self, Mouse.centre(main.panel.slots[0]), at.call(Vector2(280, 244)))   # Fire onto the default belt: a splice
 	assert_eq(run.graph.kind_of(3), MachineCatalog.FIRE)
 	assert_eq(run.graph.get_machine(3).cell, Vector2i(6, 5))
 	assert_eq(run.inventory.count(MachineCatalog.FIRE), 0)
-	await Mouse.drag(self, SLOT_SPEED, BOARD + Vector2(360, 80))       # Speed Up onto the empty cell (8, 1)
+	await Mouse.click(self, Mouse.centre(main.panel.slots[3]))      # tap Speed Up, then tap the empty cell (8, 1)
+	assert_eq(board.interaction.armed, MachineCatalog.SPEED_UP)
+	await Mouse.click(self, at.call(Vector2(360, 80)))
 	assert_eq(run.graph.get_machine(4).cell, Vector2i(8, 1))
-	await Mouse.drag(self, BOARD + Vector2(320, 240), BOARD + Vector2(322, 84))   # Fire's output -> Speed Up
-	await Mouse.drag(self, BOARD + Vector2(400, 80), BOARD + Vector2(442, 238))   # Speed Up -> the Output
+	assert_eq(board.interaction.armed, &"", "the last one placed: put back")
+	await Mouse.drag(self, at.call(Vector2(320, 240)), at.call(Vector2(322, 84)))   # Fire's output -> Speed Up
+	await Mouse.drag(self, at.call(Vector2(400, 80)), at.call(Vector2(442, 238)))   # Speed Up -> the Output
 	assert_eq(run.graph.to_dict()["wires"], ["1:0>3:0", "3:0>4:0", "4:0>2:0"])
 	var spec: BulletSpec = run.plan.bullets[0]
 	assert_eq([run.plan.bullets.size(), spec.fire_level, spec.speed_level], [1, 1, 1])
 	assert_eq(main.panel.readout.label.text.get_slice("\n", 1), "#1 " + spec.describe())
-	await Mouse.drag(self, BOARD + Vector2(360, 80), BOARD + Vector2(360, 360))   # Speed Up down to (8, 8)
+	await Mouse.drag(self, at.call(Vector2(360, 80)), at.call(Vector2(360, 360)))   # Speed Up down to (8, 8)
 	assert_eq(run.graph.get_machine(4).cell, Vector2i(8, 8))
 	assert_eq(run.graph.to_dict()["wires"], ["1:0>3:0", "3:0>4:0", "4:0>2:0"])   # its belts followed
 	assert_eq(run.inventory.count(MachineCatalog.SPEED_UP), 0)
-	await Mouse.click(self, BOARD + Vector2(360, 340), MOUSE_BUTTON_RIGHT)   # remove Speed Up: refund and heal
+	await Mouse.click(self, at.call(Vector2(360, 340)), MOUSE_BUTTON_RIGHT)   # remove Speed Up: refund
 	assert_false(run.graph.has_machine(4))
 	assert_eq(run.inventory.count(MachineCatalog.SPEED_UP), 1)
 	assert_eq(run.graph.to_dict()["wires"], ["1:0>3:0", "3:0>2:0"])
 
 
-## Main from its scene, as the game boots it. The arena is stepped by hand (I.2.6).
+## Main from its scene, as the game boots it, in a window of the project's base size. The arena is stepped by
+## hand (I.2.6).
 func _main() -> Main:
+	get_tree().root.size = Vector2i(Main.MIN_SIZE)
 	var main: Main = MainScene.instantiate() as Main
 	add_child_autofree(main)
 	main.arena.set_physics_process(false)     # after _ready, which turned it on

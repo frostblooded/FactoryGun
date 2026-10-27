@@ -3,7 +3,6 @@ extends GutTest
 const Fixtures = preload("res://test/helpers/fixtures.gd")
 const Mouse = preload("res://test/helpers/mouse.gd")
 
-const SLOT_0: Vector2 = Vector2(56, 626)        # the Fire slot's centre: PALETTE_POS + (36, 44)
 const STATUSES: Array[ShotPlan.MachineStatus] = [ShotPlan.MachineStatus.ACTIVE, ShotPlan.MachineStatus.CAPPED,
 		ShotPlan.MachineStatus.ONE_SIDED, ShotPlan.MachineStatus.DEAD_END, ShotPlan.MachineStatus.IDLE]
 
@@ -38,11 +37,15 @@ func test_render_smoke_all_statuses() -> void:
 		plan.bullets.append(spec)
 	var panel: FactoryPanel = _panel(g, Fixtures.inventory_all(1))
 	panel.theme = FactoryTheme.build()
-	assert_eq(panel.theme.default_font_size, 14)
+	assert_eq(panel.theme.default_font_size, FactoryTheme.FONT_SIZE)
+	assert_true(panel.theme.default_font is FontVariation, "bold")
+	var big: StyleBoxFlat = panel.theme.get_stylebox("normal", FactoryTheme.BIG_BUTTON)
+	assert_eq(big.bg_color, UiColors.HAZARD)
+	assert_gt(big.get_border_width(SIDE_BOTTOM), big.get_border_width(SIDE_TOP), "a thick bottom lip")
 	assert_true(panel.theme.get_stylebox("focus", "Button") is StyleBoxEmpty)
 	var pressed: StyleBoxFlat = panel.theme.get_stylebox("pressed", "Button")
 	assert_eq(pressed.border_color, UiColors.ACCENT)
-	assert_eq(pressed.get_border_width(SIDE_LEFT), 2)
+	assert_eq(pressed.get_border_width(SIDE_LEFT), FactoryTheme.BORDER)
 	assert_eq(panel.theme.get_color("font_disabled_color", "Button"), UiColors.TEXT_DIM)
 	var tip: StyleBoxFlat = panel.theme.get_stylebox("panel", "TooltipPanel")   # opaque: the palette never shows through
 	assert_eq([tip.bg_color, tip.border_color], [UiColors.PANEL_BG, UiColors.PANEL_EDGE])
@@ -93,7 +96,7 @@ func test_palette_states() -> void:
 	assert_eq(panel.slots.size(), 7)
 	for i: int in panel.slots.size():
 		assert_eq(panel.slots[i].kind, MachineCatalog.PALETTE_ORDER[i])
-		assert_eq(panel.slots[i].position, Vector2(20 + 78 * i, 582))
+		assert_eq(panel.slots[i].position, Vector2(20 + 154 * (i % 2), 108 + 184 * (i / 2)))   # two columns down the left
 		assert_eq(panel.slots[i].size, PaletteSlot.SLOT_SIZE)
 	var fire: PaletteSlot = panel.slots[0]
 	var ice: PaletteSlot = panel.slots[1]
@@ -136,12 +139,25 @@ func test_palette_states() -> void:
 func test_start_button_state_and_text() -> void:
 	var panel: FactoryPanel = _panel(FactoryGraph.create_default(), Inventory.new())
 	assert_eq(panel.start_button.focus_mode, Control.FOCUS_NONE)
-	assert_eq(panel.start_button.position, Vector2(360, 18))
-	assert_eq(panel.board.position, FactoryPanel.BOARD_POS)
-	assert_eq(panel.readout.position, FactoryPanel.READOUT_POS)
+	assert_eq(Rect2(panel.start_button.position, panel.start_button.size), Rect2(1240, 710, 340, 170))
+	assert_eq(panel.start_button.theme_type_variation, FactoryTheme.BIG_BUTTON)
+	assert_eq(panel.readout.position, Vector2(1240, 108))
+	assert_eq(panel.trash.position, Vector2(174, 660), "the last tile of the palette")
+	# the board fills the middle, scaled up, between the palette and the right column
+	var floor_rect: Rect2 = panel.board.get_global_rect()
+	assert_almost_eq(panel.board.scale.x, 884.0 / 560.0, 1e-4)
+	assert_gte(floor_rect.position.x, panel.trash.position.x + panel.trash.size.x + FactoryPanel.GAP)
+	assert_lte(floor_rect.end.x, panel.readout.position.x - FactoryPanel.GAP)
+	assert_lte(floor_rect.end.y, 900.0 - FactoryPanel.MARGIN)
+	# a wider screen (a phone held sideways) gets a bigger board and keeps the right column on the right edge
+	panel.size = Vector2(1950, 900)
+	assert_eq(panel.start_button.position.x, 1950.0 - 20.0 - 340.0)
+	assert_almost_eq(panel.board.scale.x, 772.0 / 480.0, 1e-4)
+	assert_almost_eq(panel.slots[0].ghost_scale, panel.board.scale.x, 1e-5)
+	panel.size = FactoryPanel.PANEL_SIZE
 	watch_signals(panel)
 	panel.set_start_state(3, true, "")
-	assert_eq(panel.start_button.text, "START WAVE 3  [Space]")
+	assert_eq(panel.start_button.text, "START WAVE 3")
 	assert_false(panel.start_button.disabled)
 	panel.start_button.pressed.emit()
 	assert_signal_emit_count(panel, "start_wave_requested", 1)
@@ -151,7 +167,7 @@ func test_start_button_state_and_text() -> void:
 	assert_false(panel.start_button.disabled)
 	var reason: String = "Connect the Basic Bullet to the Output first."
 	panel.set_start_state(1, false, reason)
-	assert_eq(panel.start_button.text, "START WAVE 1  [Space]")
+	assert_eq(panel.start_button.text, "START WAVE 1")
 	assert_true(panel.start_button.disabled)
 	panel._process(0.0)
 	assert_eq(panel.status_label.text, reason)            # in BUILD, the status line says why
@@ -162,8 +178,8 @@ func test_start_button_state_and_text() -> void:
 	await wait_process_frames(2)
 
 
-## E.7: the worst case, 12 lines, fills the 204 px label exactly, so the last line stays inside the readout box.
-func test_readout_fits_the_worst_case() -> void:
+## E.7: the worst case wraps past the label, which clips it inside the readout box; the first lines still show.
+func test_readout_clips_the_worst_case() -> void:
 	var panel: FactoryPanel = _panel(FactoryGraph.create_default(), Inventory.new())
 	var specs: Array[BulletSpec] = []
 	for i: int in 8:
@@ -175,9 +191,10 @@ func test_readout_fits_the_worst_case() -> void:
 	panel.set_plan(plan)
 	await wait_process_frames(2)
 	var label: Label = panel.readout.label
-	assert_eq(label.get_line_count(), 12)
-	assert_eq(label.get_visible_line_count(), 12)
-	assert_eq(label.size, Vector2(420, 204))
+	assert_true(label.clip_text)
+	assert_gt(label.get_line_count(), label.get_visible_line_count())
+	assert_gte(label.get_visible_line_count(), 8)
+	assert_eq(label.size, Vector2(312, 288))
 	assert_lte(label.position.y + label.size.y, ShotReadout.READOUT_SIZE.y)
 
 
@@ -249,14 +266,14 @@ func test_hover_refreshes_after_graph_change() -> void:
 	assert_eq(g.disconnect_wire(g.wire_from(1, 0)), GraphError.Code.OK)
 	assert_eq(ia.hover.type, BoardHit.Type.EMPTY)
 	await wait_process_frames(2)
-	# the tag comes before the description, which the label trims: the Splitter's alone is wider than the label
+	# the tag comes before the description, so it shows even when the text wraps past the label
 	assert_eq(g.add_machine(MachineCatalog.SPLITTER, Vector2i(6, 1)), 3)
 	plan.statuses[3] = ShotPlan.MachineStatus.ONE_SIDED
 	ia.motion(Vector2(280, 80))
 	panel._process(0.0)
 	assert_eq(panel.status_label.text, "Splitter #3 [one-sided]: " + MachineCatalog.get_def(MachineCatalog.SPLITTER).description)
-	var font: Font = panel.status_label.get_theme_font("font")
-	assert_gt(font.get_string_size(panel.status_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x, panel.status_label.size.x)
+	await wait_process_frames(1)
+	assert_gt(panel.status_label.get_line_count(), 1, "wraps")
 
 
 func test_board_layers_and_what_redraws() -> void:
@@ -332,7 +349,7 @@ func test_refusal_box_and_remove_label_stay_clear_and_inside() -> void:
 	var middle: Rect2 = BoardLayout.machine_rect_at(Vector2i(6, 1))
 	assert_eq(board._release_label(middle).get_center(), middle.get_center())
 	assert_eq(board._release_label(BoardLayout.machine_rect_at(Vector2i(0, 1))).position.x, 0.0)
-	assert_eq(board._release_label(BoardLayout.machine_rect_at(Vector2i(12, 10))).end, Vector2(560, 449))
+	assert_eq(board._release_label(BoardLayout.machine_rect_at(Vector2i(12, 10))).end, Vector2(560, 453))
 
 
 ## The ghost of a palette drag leaves the board with the cursor, and with a drag that ends without a drop.
@@ -340,18 +357,20 @@ func test_locking_cancels_a_palette_drag() -> void:
 	await Mouse.prepare(self)
 	var panel: FactoryPanel = _panel(FactoryGraph.create_default(), Fixtures.inventory_all(1))
 	var board: FactoryBoard = panel.board
+	var slot: Vector2 = Mouse.centre(panel.slots[0])
+	var on_floor: Vector2 = Mouse.on_board(board, Vector2(280, 80))
 	watch_signals(board)
-	Mouse.move(SLOT_0, SLOT_0, 0)
+	Mouse.move(slot, slot, 0)
 	await wait_process_frames(1)
-	Mouse.button(SLOT_0, true)
+	Mouse.button(slot, true)
 	await wait_process_frames(1)
-	var last: Vector2 = SLOT_0
-	# up onto the board, back over the palette, onto the board again
-	for p: Vector2 in [SLOT_0 + Vector2(0, -60), SLOT_0 + Vector2(0, -120), SLOT_0, SLOT_0 + Vector2(0, -120)]:
+	var last: Vector2 = slot
+	# a little way, onto the board, back over the palette, onto the board again
+	for p: Vector2 in [slot + Vector2(60, 0), on_floor, slot, on_floor]:
 		Mouse.move(p, last, MOUSE_BUTTON_MASK_LEFT)
 		last = p
 		await wait_process_frames(1)
-		assert_eq(board._drop != null, p.y < FactoryPanel.BOARD_POS.y + board.size.y, str(p))
+		assert_eq(board._drop != null, p == on_floor, str(p))
 	assert_true(get_viewport().gui_is_dragging())
 	panel.set_locked(true, "LOCKED · WAVE 1 IN PROGRESS")
 	assert_false(get_viewport().gui_is_dragging())
@@ -367,13 +386,13 @@ func test_palette_drag_places_on_board() -> void:
 	var g: FactoryGraph = FactoryGraph.create_default()
 	var panel: FactoryPanel = _panel(g, Fixtures.inventory_all(1))
 	watch_signals(panel.board)
-	await Mouse.drag(self, SLOT_0, FactoryPanel.BOARD_POS + Vector2(240, 80))   # the centre of cell (5, 1)
+	await Mouse.drag(self, Mouse.centre(panel.slots[0]), Mouse.on_board(panel.board, Vector2(240, 80)))   # the centre of cell (5, 1)
 	assert_signal_emit_count(panel.board, "place_requested", 1)
 	assert_signal_emitted_with_parameters(panel.board, "place_requested", [MachineCatalog.FIRE, Vector2i(5, 1), null])
 	assert_signal_not_emitted(panel.board, "refused")
 	assert_eq(g.machine_ids(), PackedInt32Array([1, 2]))   # the board only asks
 	# dropped on the Source: refused with the reason, nothing placed
-	await Mouse.drag(self, SLOT_0, FactoryPanel.BOARD_POS + Vector2(80, 240))
+	await Mouse.drag(self, Mouse.centre(panel.slots[0]), Mouse.on_board(panel.board, Vector2(80, 240)))
 	assert_signal_emit_count(panel.board, "place_requested", 1)
 	assert_signal_emitted_with_parameters(panel.board, "refused", [GraphError.describe(GraphError.Code.CELL_OCCUPIED)])
 	assert_eq(panel.status_label.text, GraphError.describe(GraphError.Code.CELL_OCCUPIED))
@@ -385,7 +404,7 @@ func test_palette_drag_onto_belt_splices() -> void:
 	var panel: FactoryPanel = _panel(g, Fixtures.inventory_all(1))
 	watch_signals(panel.board)
 	# 14 px from the belt 1:0>2:0, the drop cell already puts the machine's ports on it: that splices too
-	await Mouse.drag(self, SLOT_0, FactoryPanel.BOARD_POS + Vector2(280, 254))
+	await Mouse.drag(self, Mouse.centre(panel.slots[0]), Mouse.on_board(panel.board, Vector2(280, 254)))
 	assert_signal_emit_count(panel.board, "place_requested", 1)
 	var params: Array = get_signal_parameters(panel.board, "place_requested")
 	assert_eq(params[0], MachineCatalog.FIRE)
@@ -399,7 +418,7 @@ func test_wire_drag_emits_connect() -> void:
 	assert_eq(g.add_machine(MachineCatalog.FIRE, Vector2i(5, 1)), 3)   # input at (200, 80)
 	var panel: FactoryPanel = _panel(g, Fixtures.inventory_all(1))
 	watch_signals(panel.board)
-	await Mouse.drag(self, FactoryPanel.BOARD_POS + Vector2(120, 240), FactoryPanel.BOARD_POS + Vector2(205, 85))
+	await Mouse.drag(self, Mouse.on_board(panel.board, Vector2(120, 240)), Mouse.on_board(panel.board, Vector2(205, 85)))
 	assert_signal_emit_count(panel.board, "connect_requested", 1)
 	assert_signal_emitted_with_parameters(panel.board, "connect_requested", [FactoryGraph.SOURCE_ID, 0, 3, 0])
 	assert_signal_not_emitted(panel.board, "refused")
@@ -410,7 +429,7 @@ func test_machine_drag_off_floor_emits_remove() -> void:
 	var g: FactoryGraph = Fixtures.chain([MachineCatalog.FIRE])   # Fire #3 at (3, 1)
 	var panel: FactoryPanel = _panel(g, Fixtures.inventory_all(1))
 	watch_signals(panel.board)
-	await Mouse.drag(self, FactoryPanel.BOARD_POS + Vector2(160, 80), Vector2(300, 560))   # below the floor
+	await Mouse.drag(self, Mouse.on_board(panel.board, Vector2(160, 80)), Vector2(300, 560))   # below the floor
 	assert_signal_emit_count(panel.board, "remove_requested", 1)
 	assert_signal_emitted_with_parameters(panel.board, "remove_requested", [3])
 	assert_signal_not_emitted(panel.board, "move_requested")
@@ -420,12 +439,9 @@ func test_trash_bin_lights_up_and_takes_a_machine() -> void:
 	await Mouse.prepare(self)
 	var g: FactoryGraph = Fixtures.chain([MachineCatalog.FIRE])   # Fire #3 at (3, 1)
 	var panel: FactoryPanel = _panel(g, Fixtures.inventory_all(1))
-	var bin: Vector2 = FactoryPanel.TRASH_POS + TrashBin.BIN_SIZE / 2
-	var font: Font = panel.get_theme_default_font()
-	assert_lte(font.get_string_size(FactoryPanel.HINT, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x, 560.0, "the hint fits")
-	assert_lt(FactoryPanel.TRASH_POS.x + TrashBin.BIN_SIZE.x, panel.start_button.position.x, "left of Start")
+	var bin: Vector2 = Mouse.centre(panel.trash)
 	watch_signals(panel.board)
-	var at: Vector2 = FactoryPanel.BOARD_POS + Vector2(160, 80)
+	var at: Vector2 = Mouse.on_board(panel.board, Vector2(160, 80))
 	Mouse.move(at, at, 0)
 	await wait_process_frames(1)
 	Mouse.button(at, true)
@@ -440,7 +456,7 @@ func test_trash_bin_lights_up_and_takes_a_machine() -> void:
 	await wait_process_frames(2)
 	assert_signal_emitted_with_parameters(panel.board, "remove_requested", [3])
 	assert_eq([panel.trash.armed, panel.trash.hot], [false, false])
-	at = FactoryPanel.BOARD_POS + Vector2(60, 220)        # the Source cannot be removed: the bin stays dark
+	at = Mouse.on_board(panel.board, Vector2(60, 220))        # the Source cannot be removed: the bin stays dark
 	Mouse.move(at, bin, 0)
 	await wait_process_frames(1)
 	Mouse.button(at, true)
@@ -460,7 +476,7 @@ func test_tapping_a_belt_shows_cut() -> void:
 	var board: FactoryBoard = panel.board
 	watch_signals(board)
 	assert_false(board.cut_button.visible)
-	await Mouse.click(self, FactoryPanel.BOARD_POS + Vector2(280, 240))
+	await Mouse.click(self, Mouse.on_board(panel.board, Vector2(280, 240)))
 	await wait_process_frames(1)
 	assert_true(board.cut_button.visible)
 	assert_eq(board.cut_button.position, Vector2(280, 240) + FactoryBoard.CUT_OFFSET)
@@ -469,9 +485,9 @@ func test_tapping_a_belt_shows_cut() -> void:
 	await wait_process_frames(1)
 	assert_false(board.cut_button.visible, "locking drops the pick")
 	board.set_locked(false, "")
-	await Mouse.click(self, FactoryPanel.BOARD_POS + Vector2(280, 240))
+	await Mouse.click(self, Mouse.on_board(panel.board, Vector2(280, 240)))
 	await wait_process_frames(1)
-	await Mouse.click(self, FactoryPanel.BOARD_POS + Vector2(280, 240) + FactoryBoard.CUT_OFFSET + Vector2(30, 15))
+	await Mouse.click(self, Mouse.on_board(board, Vector2(280, 240) + FactoryBoard.CUT_OFFSET + Vector2(30, 15)))
 	assert_signal_emit_count(board, "disconnect_requested", 1)
 	assert_same(get_signal_parameters(board, "disconnect_requested")[0], g.wire_from(FactoryGraph.SOURCE_ID, 0))
 	await wait_process_frames(1)
@@ -490,7 +506,7 @@ func test_machine_drag_on_floor_emits_move() -> void:
 	var panel: FactoryPanel = _panel(g, Fixtures.inventory_all(1))
 	watch_signals(panel.board)
 	# grabbed at its centre and released 80 px right and down: the ghost sits on cell (7, 3)
-	await Mouse.drag(self, FactoryPanel.BOARD_POS + Vector2(240, 80), FactoryPanel.BOARD_POS + Vector2(320, 160))
+	await Mouse.drag(self, Mouse.on_board(panel.board, Vector2(240, 80)), Mouse.on_board(panel.board, Vector2(320, 160)))
 	assert_signal_emit_count(panel.board, "move_requested", 1)
 	assert_signal_emitted_with_parameters(panel.board, "move_requested", [3, Vector2i(7, 3)])
 	assert_signal_not_emitted(panel.board, "remove_requested")
@@ -509,7 +525,7 @@ func test_focus_loss_ends_a_board_gesture() -> void:
 	var modes: Array[BoardInteraction.Mode] = [BoardInteraction.Mode.DRAG_MACHINE, BoardInteraction.Mode.DRAG_WIRE]
 	var lost: Array[int] = [NOTIFICATION_APPLICATION_FOCUS_OUT, NOTIFICATION_WM_WINDOW_FOCUS_OUT]
 	for i: int in starts.size():
-		var at: Vector2 = FactoryPanel.BOARD_POS + starts[i]
+		var at: Vector2 = Mouse.on_board(board, starts[i])
 		var to: Vector2 = at + Vector2(80, 160)   # a free cell for Fire: a release would move it
 		Mouse.move(at, at, 0)
 		await wait_process_frames(1)
@@ -531,10 +547,46 @@ func test_right_click_belt_emits_disconnect() -> void:
 	var g: FactoryGraph = FactoryGraph.create_default()
 	var panel: FactoryPanel = _panel(g, Fixtures.inventory_all(1))
 	watch_signals(panel.board)
-	await Mouse.click(self, FactoryPanel.BOARD_POS + Vector2(280, 240), MOUSE_BUTTON_RIGHT)
+	await Mouse.click(self, Mouse.on_board(panel.board, Vector2(280, 240)), MOUSE_BUTTON_RIGHT)
 	assert_signal_emit_count(panel.board, "disconnect_requested", 1)
 	assert_same(get_signal_parameters(panel.board, "disconnect_requested")[0], g.wire_from(FactoryGraph.SOURCE_ID, 0))
 	assert_signal_not_emitted(panel.board, "remove_requested")
+
+
+## Tap a tile to pick the machine up, tap the floor to place it; tap the tile again to put it back.
+func test_tap_to_place() -> void:
+	await Mouse.prepare(self)
+	var inv: Inventory = Inventory.from_counts({MachineCatalog.FIRE: 1, MachineCatalog.ICE: 1})
+	assert_true(inv.take(MachineCatalog.ICE))            # none left, but owned before
+	var panel: FactoryPanel = _panel(FactoryGraph.create_default(), inv)
+	var board: FactoryBoard = panel.board
+	watch_signals(board)
+	await Mouse.click(self, Mouse.centre(panel.slots[0]))
+	assert_eq(board.interaction.armed, MachineCatalog.FIRE)
+	panel._process(0.0)
+	assert_true(panel.slots[0].armed, "the picked tile is lit")
+	assert_eq(panel.status_label.text, "Tap the floor to place Fire. Tap its tile again to put it back.")
+	await Mouse.click(self, Mouse.centre(panel.slots[0]))   # put back
+	assert_eq(board.interaction.armed, &"")
+	await Mouse.click(self, Mouse.centre(panel.slots[0]))
+	await Mouse.click(self, Mouse.on_board(board, Vector2(240, 80)))   # the centre of cell (5, 1)
+	assert_signal_emitted_with_parameters(board, "place_requested", [MachineCatalog.FIRE, Vector2i(5, 1), null])
+	assert_true(inv.take(MachineCatalog.FIRE))           # the run places it: none left, so it is put back
+	assert_eq(board.interaction.armed, &"")
+	await Mouse.click(self, Mouse.centre(panel.slots[1]))   # none left: says so
+	assert_eq(board.interaction.armed, &"")
+	panel._process(0.0)
+	assert_eq(panel.status_label.text, "No Ice left. Take it off the floor, or win more.")
+	await Mouse.click(self, Mouse.centre(panel.slots[2]))   # never found
+	panel._process(0.0)
+	assert_eq(panel.status_label.text, "Not found yet. Clear waves to earn new machines.")
+	assert_true(inv.add(MachineCatalog.ICE, 1))
+	await Mouse.click(self, Mouse.centre(panel.slots[1]))
+	assert_eq(board.interaction.armed, MachineCatalog.ICE)
+	panel.set_locked(true, "LOCKED · WAVE 1 IN PROGRESS")   # a wave puts it back
+	assert_eq(board.interaction.armed, &"")
+	await Mouse.click(self, Mouse.centre(panel.slots[1]))
+	assert_eq(board.interaction.armed, &"", "locked tiles do nothing")
 
 
 func _keys(wires: Array[Wire]) -> Array[String]:

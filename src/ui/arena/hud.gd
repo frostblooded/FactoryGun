@@ -1,15 +1,15 @@
 class_name Hud
 extends Control
-## Top bar, wave banner and idle hint over the arena (docs/DESIGN.md F.7). Draws itself.
+## The fight screen's HUD (docs/DESIGN.md F.7): wave and HP on the left wing, enemies left on the right wing, and
+## the wave banner over the arena. Draws itself, in screen (controller-local) coordinates.
 
-const BAR_SIZE: Vector2 = Vector2(1000, 36)
-const HP_BAR: Rect2 = Rect2(380, 11, 240, 14)
 const LOW_HP: float = 30.0
 const BANNER_TIME: float = 1.5
 const BANNER_FADE: float = 0.5
-const BANNER_Y: float = 300.0
-const HINT_Y: float = 860.0
-const IDLE_HINT: String = "Build your gun on the left · press START WAVE to begin"
+const BANNER_SIZE: int = 96
+const NUMBER_SIZE: int = 110
+const CAPTION_SIZE: int = 30
+const WING_PAD: float = 28.0
 
 var wave: int = 1
 var running: bool = false
@@ -17,6 +17,7 @@ var hp: float = Tuning.PLAYER_MAX_HP
 var enemies_left: int = 0
 var banner_text: String = ""
 var banner_left: float = 0.0              # seconds the banner still shows
+var arena: Rect2 = Rect2(Vector2(300, 0), SimTuning.ARENA_SIZE)   # where the arena is drawn; set by the controller
 
 
 func _process(delta: float) -> void:
@@ -27,23 +28,34 @@ func _process(delta: float) -> void:
 
 func _draw() -> void:
 	var font: Font = get_theme_default_font()
-	draw_rect(Rect2(Vector2.ZERO, BAR_SIZE), Color(UiColors.PANEL_BG, 0.85))
-	draw_string(font, Vector2(16, 25), "WAVE %d" % wave, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, UiColors.TEXT)
-	draw_rect(HP_BAR, UiColors.STEEL_DARK)
-	var fill: float = HP_BAR.size.x * clampf(hp / Tuning.PLAYER_MAX_HP, 0.0, 1.0)
-	draw_rect(Rect2(HP_BAR.position, Vector2(fill, HP_BAR.size.y)), UiColors.ERROR if hp < LOW_HP else UiColors.OK)
-	draw_rect(HP_BAR, UiColors.OUTLINE, false, 1.0)
-	draw_string(font, Vector2(HP_BAR.end.x + 10, 24), "HP %d" % ceili(hp), HORIZONTAL_ALIGNMENT_LEFT, -1, 16,
-			UiColors.TEXT)
-	var right: String = "ENEMIES %d" % enemies_left if running else "BUILD PHASE"
-	draw_string(font, Vector2(BAR_SIZE.x - 216, 24), right, HORIZONTAL_ALIGNMENT_RIGHT, 200, 16, UiColors.TEXT)
+	var left: Rect2 = Rect2(WING_PAD, 0, arena.position.x - 2 * WING_PAD, size.y)
+	var right: Rect2 = Rect2(arena.end.x + WING_PAD, 0, size.x - arena.end.x - 2 * WING_PAD, size.y)
+	_caption(font, left, 80, "WAVE")
+	draw_string(font, Vector2(left.position.x, 80 + NUMBER_SIZE), str(wave), HORIZONTAL_ALIGNMENT_CENTER, left.size.x,
+			NUMBER_SIZE, UiColors.ACCENT)
+	_caption(font, left, 300, "HP")
+	var bar: Rect2 = hp_bar_rect()
+	draw_style_box(FactoryTheme.box(UiColors.STEEL_DARK, UiColors.OUTLINE, FactoryTheme.BORDER), bar)
+	var inner: Rect2 = bar.grow(-FactoryTheme.BORDER)
+	inner.size.x *= clampf(hp / Tuning.PLAYER_MAX_HP, 0.0, 1.0)
+	draw_rect(inner, UiColors.ERROR if hp < LOW_HP else UiColors.OK)
+	draw_string(font, bar.position + Vector2(0, 46), str(ceili(hp)), HORIZONTAL_ALIGNMENT_CENTER, bar.size.x, 38,
+			UiColors.INK)
+	_caption(font, right, 80, "ENEMIES" if running else "READY")
+	draw_string(font, Vector2(right.position.x, 80 + NUMBER_SIZE), str(enemies_left) if running else "-",
+			HORIZONTAL_ALIGNMENT_CENTER, right.size.x, NUMBER_SIZE, UiColors.TEXT)
+	if running:
+		_caption(font, right, size.y - 120, "DRAG ANYWHERE")
+		_caption(font, right, size.y - 80, "TO MOVE")
 	if banner_left > 0.0:
-		var baseline: float = BANNER_Y - font.get_height(40) / 2.0 + font.get_ascent(40)
-		draw_string(font, Vector2(0, baseline), banner_text, HORIZONTAL_ALIGNMENT_CENTER, BAR_SIZE.x, 40,
-				Color(UiColors.ACCENT, minf(banner_left / BANNER_FADE, 1.0)))
-	if not running:
-		draw_string(font, Vector2(0, HINT_Y), IDLE_HINT, HORIZONTAL_ALIGNMENT_CENTER, BAR_SIZE.x, 16,
-				UiColors.TEXT_DIM)
+		var baseline: float = arena.get_center().y - font.get_height(BANNER_SIZE) / 2.0 + font.get_ascent(BANNER_SIZE)
+		draw_string(font, Vector2(arena.position.x, baseline), banner_text, HORIZONTAL_ALIGNMENT_CENTER, arena.size.x,
+				BANNER_SIZE, Color(UiColors.ACCENT, minf(banner_left / BANNER_FADE, 1.0)))
+
+
+## Hud-local: the HP bar on the left wing.
+func hp_bar_rect() -> Rect2:
+	return Rect2(WING_PAD, 320, maxf(arena.position.x - 2 * WING_PAD, 40.0), 64)
 
 
 func set_wave(p_wave: int, p_running: bool) -> void:
@@ -58,8 +70,13 @@ func set_stats(p_hp: float, p_enemies_left: int) -> void:
 	queue_redraw()
 
 
-## Size-40 ACCENT text centred at y 300 for 1.5 s, fading over the last 0.5 s.
+## BANNER_SIZE ACCENT text centred on the arena for 1.5 s, fading over the last 0.5 s.
 func show_banner(text: String) -> void:
 	banner_text = text
 	banner_left = BANNER_TIME
 	queue_redraw()
+
+
+func _caption(font: Font, wing: Rect2, baseline: float, text: String) -> void:
+	draw_string(font, Vector2(wing.position.x, baseline), text, HORIZONTAL_ALIGNMENT_CENTER, wing.size.x, CAPTION_SIZE,
+			UiColors.TEXT_DIM)

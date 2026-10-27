@@ -1,10 +1,23 @@
 extends RefCounted
 ## Real mouse input through Input.parse_input_event (the same path as a player, including drag-and-drop).
-## Call `await Mouse.prepare(self)` first. Keep positions at x < 950 (GUT's panel covers x 963..1595).
+## Call `await Mouse.prepare(self)` first.
 
+## Also hides GUT's own window, which would otherwise sit over the right of the screen and take the clicks.
 static func prepare(t: GutTest) -> void:
 	t.get_tree().root.size = Vector2i(1600, 900)    # the headless root window is 64x64
+	for gui: Node in t.get_tree().root.find_children("GutScene", "", true, false):
+		(gui as CanvasItem).visible = false
 	await t.wait_process_frames(2)
+
+
+## Where a board-local point is on the screen: the board is scaled up and placed by its panel.
+static func on_board(board: FactoryBoard, local: Vector2) -> Vector2:
+	return board.get_global_transform_with_canvas() * local
+
+
+## The centre of a control on the screen.
+static func centre(c: Control) -> Vector2:
+	return c.get_global_transform_with_canvas() * (c.size / 2.0)
 
 
 static func move(pos: Vector2, last: Vector2, mask: int) -> void:
