@@ -25,20 +25,42 @@ jobs:
 
       - name: Check for Godot project
         id: project
-        run: echo "exists=$([ -f project.godot ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "exists=$([ -f project.godot ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # The templates archive is about 1 GB; cache the binary and the web templates instead.
+      - name: Cache Godot and web export templates
+        id: godot-cache
+        if: steps.project.outputs.exists == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/bin/godot
+            ~/.local/share/godot/export_templates/${{ env.GODOT_VERSION }}.stable
+          key: godot-web-${{ env.GODOT_VERSION }}
 
       - name: Install Godot and web export templates
-        if: steps.project.outputs.exists == 'true'
+        if: steps.project.outputs.exists == 'true' && steps.godot-cache.outputs.cache-hit != 'true'
         run: |
           base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
           curl -sSLo godot.zip "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
           unzip -q godot.zip
-          sudo mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot
+          mkdir -p ~/.local/bin
+          mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" ~/.local/bin/godot
           curl -sSLo templates.tpz "$base/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
           dir="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
           mkdir -p "$dir"
           unzip -qj templates.tpz 'templates/web_*' 'templates/version.txt' -d "$dir"
           rm godot.zip templates.tpz
+
+      - name: Restore import cache
+        if: steps.project.outputs.exists == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .godot
+          key: godot-import-${{ env.GODOT_VERSION }}-${{ github.sha }}
+          restore-keys: godot-import-${{ env.GODOT_VERSION }}-
 
       - name: Export for Web
         if: steps.project.outputs.exists == 'true'
