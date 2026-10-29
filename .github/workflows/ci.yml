@@ -13,6 +13,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A PR that only touches Markdown or docs/ skips the Godot steps; the job still reports green.
+      - name: Detect code changes
+        id: changes
+        run: |
+          godot=false
+          if [ -f project.godot ]; then
+            godot=true
+            if [ "${{ github.event_name }}" = pull_request ] &&
+               ! git diff --name-only "${{ github.event.pull_request.base.sha }}...HEAD" | grep -qvE '(\.md$|^docs/)'; then
+              godot=false
+              echo "Docs-only change: skipping Godot steps."
+            fi
+          fi
+          echo "godot=$godot" >> "$GITHUB_OUTPUT"
 
       - name: Validate JSON
         run: |
@@ -21,23 +38,39 @@ jobs:
           done
 
       - name: Install Godot
-        if: hashFiles('project.godot') != ''
+        if: steps.changes.outputs.godot == 'true'
         run: |
           curl -sSLo godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
           unzip -q godot.zip
           sudo mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot
           rm godot.zip
 
+      # Only master saves the import cache; PRs restore the latest one (branch caches can't be shared).
+      - name: Restore import cache
+        if: steps.changes.outputs.godot == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .godot
+          key: godot-import-${{ env.GODOT_VERSION }}-${{ github.sha }}
+          restore-keys: godot-import-${{ env.GODOT_VERSION }}-
+
       - name: Import project
-        if: hashFiles('project.godot') != ''
+        if: steps.changes.outputs.godot == 'true'
         run: godot --headless --import
 
+      - name: Save import cache
+        if: steps.changes.outputs.godot == 'true' && github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: .godot
+          key: godot-import-${{ env.GODOT_VERSION }}-${{ github.sha }}
+
       - name: Run GUT tests
-        if: hashFiles('addons/gut/gut_cmdln.gd') != ''
+        if: steps.changes.outputs.godot == 'true' && hashFiles('addons/gut/gut_cmdln.gd') != ''
         run: godot --headless -s addons/gut/gut_cmdln.gd -gdir=res://test -ginclude_subdirs -gexit
 
       - name: Check generated files and boot the game
-        if: hashFiles('project.godot') != ''
+        if: steps.changes.outputs.godot == 'true'
         run: |
           set -o pipefail
           if [ -n "$(git status --porcelain)" ]; then

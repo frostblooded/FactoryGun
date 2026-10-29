@@ -1,7 +1,7 @@
 extends GutTest
 ## Plugs GUT 9.5.0 blind spots. GUT loads test scripts, and any src script first pulled in while it
 ## collects tests, with GDScript warnings disabled, so untyped code would pass. Each script is compiled
-## again in a fresh `godot --check-only` process, which applies the project's warnings-as-errors to the
+## again in a fresh `godot --check-only` process (one per core at a time), which applies the project's warnings-as-errors to the
 ## real file, class_name included. In-process recompiles are unsafe or wrong (L.1 #1b). OS.execute is
 ## fine here: export_presets.cfg excludes test/ from the web export.
 
@@ -12,10 +12,23 @@ func test_every_script_compiles_with_project_warnings() -> void:
 	var project: String = ProjectSettings.globalize_path("res://")
 	var paths: PackedStringArray = _scripts("res://src") + _scripts("res://test")
 	assert_gt(paths.size(), 0)
-	for path: String in paths:
-		var out: Array = []
-		var code: int = OS.execute(OS.get_executable_path(), ["--headless", "--path", project, "--check-only", "-s", path], out, true)
-		assert_eq(code, 0, "%s\n%s" % [path, "\n".join(out)])
+	var queue: Array = Array(paths)
+	var running: Array[Dictionary] = []
+	while not queue.is_empty() or not running.is_empty():
+		while not queue.is_empty() and running.size() < OS.get_processor_count():
+			var path: String = queue.pop_back()
+			var proc: Dictionary = OS.execute_with_pipe(OS.get_executable_path(), ["--headless", "--path", project, "--check-only", "-s", path], false)
+			proc["path"] = path
+			proc["out"] = PackedByteArray()
+			running.append(proc)
+		OS.delay_msec(5)
+		for proc: Dictionary in running.duplicate():
+			_drain(proc)                          # keep the pipes empty so a chatty child never blocks
+			if not OS.is_process_running(proc["pid"]):
+				_drain(proc)
+				var code: int = OS.get_process_exit_code(proc["pid"])
+				assert_eq(code, 0, "%s\n%s" % [proc["path"], (proc["out"] as PackedByteArray).get_string_from_utf8()])
+				running.erase(proc)
 
 
 func test_core_and_sim_are_pure() -> void:
@@ -37,6 +50,15 @@ func test_input_actions_are_registered() -> void:
 			InputSetup.START_WAVE, InputSetup.DELETE_HOVERED, InputSetup.CANCEL,
 			InputSetup.RESTART] + InputSetup.PICK:
 		assert_true(InputMap.has_action(a) and not InputMap.action_get_events(a).is_empty(), String(a))
+
+
+func _drain(proc: Dictionary) -> void:
+	for pipe: String in ["stdio", "stderr"]:
+		var f: FileAccess = proc[pipe]
+		var chunk: PackedByteArray = f.get_buffer(65536)
+		while not chunk.is_empty():
+			proc["out"].append_array(chunk)
+			chunk = f.get_buffer(65536)
 
 
 func _scripts(dir: String) -> PackedStringArray:
