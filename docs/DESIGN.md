@@ -2257,7 +2257,7 @@ hook only with a local `timeout 300 godot ...` run.
 extends GutTest
 ## Plugs GUT 9.5.0 blind spots. GUT loads test scripts, and any src script first pulled in while it
 ## collects tests, with GDScript warnings disabled, so untyped code would pass. Each script is compiled
-## again in a fresh `godot --check-only` process, which applies the project's warnings-as-errors to the
+## again in a fresh `godot --check-only` process (one per core at a time), which applies the project's warnings-as-errors to the
 ## real file, class_name included. In-process recompiles are unsafe or wrong (L.1 #1b). OS.execute is
 ## fine here: export_presets.cfg excludes test/ from the web export.
 
@@ -2268,10 +2268,23 @@ func test_every_script_compiles_with_project_warnings() -> void:
 	var project: String = ProjectSettings.globalize_path("res://")
 	var paths: PackedStringArray = _scripts("res://src") + _scripts("res://test")
 	assert_gt(paths.size(), 0)
-	for path: String in paths:
-		var out: Array = []
-		var code: int = OS.execute(OS.get_executable_path(), ["--headless", "--path", project, "--check-only", "-s", path], out, true)
-		assert_eq(code, 0, "%s\n%s" % [path, "\n".join(out)])
+	var queue: Array = Array(paths)
+	var running: Array[Dictionary] = []
+	while not queue.is_empty() or not running.is_empty():
+		while not queue.is_empty() and running.size() < OS.get_processor_count():
+			var path: String = queue.pop_back()
+			var proc: Dictionary = OS.execute_with_pipe(OS.get_executable_path(), ["--headless", "--path", project, "--check-only", "-s", path], false)
+			proc["path"] = path
+			proc["out"] = PackedByteArray()
+			running.append(proc)
+		OS.delay_msec(5)
+		for proc: Dictionary in running.duplicate():
+			_drain(proc)                          # keep the pipes empty so a chatty child never blocks
+			if not OS.is_process_running(proc["pid"]):
+				_drain(proc)
+				var code: int = OS.get_process_exit_code(proc["pid"])
+				assert_eq(code, 0, "%s\n%s" % [proc["path"], (proc["out"] as PackedByteArray).get_string_from_utf8()])
+				running.erase(proc)
 
 
 func test_core_and_sim_are_pure() -> void:
@@ -2295,6 +2308,15 @@ func test_input_actions_are_registered() -> void:
 		assert_true(InputMap.has_action(a) and not InputMap.action_get_events(a).is_empty(), String(a))
 
 
+func _drain(proc: Dictionary) -> void:
+	for pipe: String in ["stdio", "stderr"]:
+		var f: FileAccess = proc[pipe]
+		var chunk: PackedByteArray = f.get_buffer(65536)
+		while not chunk.is_empty():
+			proc["out"].append_array(chunk)
+			chunk = f.get_buffer(65536)
+
+
 func _scripts(dir: String) -> PackedStringArray:
 	var out: PackedStringArray = []
 	if not DirAccess.dir_exists_absolute(dir):  # src/sim does not exist until WP2
@@ -2312,8 +2334,9 @@ similar. The `#` inside strings such as `"#%d"` is harmless to strip.
 
 Verified behaviour of the sanity test (Godot 4.5.1, GUT 9.5.0):
 
-- A clean run passes, and the tree stays clean. Each `--check-only` process takes about 0.3–0.6 s, so
-  the planned ~80 scripts take roughly 25–50 s locally. GUT has no per-test timeout.
+- A clean run passes, and the tree stays clean. Each `--check-only` process takes about 0.3–0.6 s, and
+  the sweep runs one per core at a time (`OS.execute_with_pipe`, pipes drained while it waits), so ~80
+  scripts take about 9 s on 4 cores instead of 33 s one after another. GUT has no per-test timeout.
 - An untyped test file fails this test with the parse errors, while the file's own tests still run.
 - An untyped `src` script used by another test fails this test, and the other test still passes.
 - A syntax error fails this test (and the post-run hook).
@@ -2758,7 +2781,7 @@ Notes on this step:
 | Failure | Caught by |
 |---|---|
 | A failing assert, or an engine error or warning inside a test body | GUT (exit 1) |
-| Untyped code, or a parse error in any `src` or `test` script | `test_every_script_compiles_with_project_warnings` (one fresh `--check-only` process per file) |
+| Untyped code, or a parse error in any `src` or `test` script | `test_every_script_compiles_with_project_warnings` (one fresh `--check-only` process per file, one per core at a time) |
 | A test file GUT silently skipped | the post-run hook (file check) |
 | Errors in `before_each`/`after_each`/deferred calls/frees | the post-run hook (stray errors) |
 | core/sim importing engine state | `test_core_and_sim_are_pure` |
